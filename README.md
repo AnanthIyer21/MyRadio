@@ -74,14 +74,16 @@ app runs in a local demo mode that still plays music.
 
 Working vertical slice:
 
-- **Conversational onboarding** — free-text + voice dictation; tell it what you're into
-  in your own words, and choose how long news / podcasts / audiobooks should be.
+- **Conversational onboarding** — free-text + **Wispr Flow** voice dictation (browser
+  fallback); tell it what you're into in your own words, set lengths with sliders, and
+  optionally connect Spotify right there. See `docs/WISPR.md`.
 - **Live, relevance-ranked station** — multi-outlet news ranked to your stated interests,
   real podcasts (iTunes), public-domain audiobooks (Gutendex), playable music.
 - **Player** — full audio for music/episodes; news/podcast/audiobook play as a **spoken,
   length-matched AI summary** or in **full** (the full article / episode / book read aloud).
   Seekable bar, time-remaining, **±10s skip** on long content, go-back/skip, a chime
-  between items, and taste-learning feedback.
+  between items, **gentle ambient bed under spoken content**, and taste-learning feedback.
+  In-player ⚙ Settings tune AI-summary/full **and** lengths mid-session.
 - **Spotify Connect (Premium)** — connect to play full tracks from your own library; your
   top artists/genres feed ranking. Non-Premium falls back to royalty-free + iTunes.
   Setup: `docs/SPOTIFY.md`.

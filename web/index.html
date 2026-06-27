@@ -59,6 +59,14 @@
       </div>
     </div>
 
+    <div class="field">
+      <span>Got Spotify Premium? Connect it for full tracks from your own library + playlists.</span>
+      <div class="sp-connect">
+        <button id="ob-spotify" class="sp">Connect Spotify</button>
+        <span id="ob-spotify-status" class="sp-note">Optional — no Premium? We'll use royalty-free music + iTunes podcasts.</span>
+      </div>
+    </div>
+
     <button id="ob-start" class="primary">Build my station →</button>
   </main>
 
@@ -70,7 +78,6 @@
         <div id="explanation" class="explanation"></div>
       </div>
       <div class="cb-actions">
-        <button id="spotify" class="sp" title="Connect Spotify">Connect Spotify</button>
         <button id="gear" class="gear" title="Listening settings">⚙</button>
       </div>
     </div>
@@ -86,7 +93,19 @@
       <div class="setrow"><span>📖 Audiobooks</span>
         <div class="seg" data-type="audiobook"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full text</button></div>
       </div>
-      <p class="hint" id="sp-status">🎵 Music always plays in full. Summaries are spoken by your browser — connect Spotify Premium for full-track music & your playlists. See docs/VOICE_AND_TTS.md for premium voices.</p>
+
+      <h3 class="settings-sub">Lengths</h3>
+      <div class="setrow"><span>📰 News</span>
+        <div class="slider"><input id="s-news" type="range" min="15" max="120" step="5"><span id="s-news-val"></span></div>
+      </div>
+      <div class="setrow"><span>🎙 Podcasts</span>
+        <div class="slider"><input id="s-podcast" type="range" min="1" max="16" step="1"><span id="s-podcast-val"></span></div>
+      </div>
+      <div class="setrow"><span>📖 Audiobooks</span>
+        <div class="slider"><input id="s-audiobook" type="range" min="1" max="16" step="1"><span id="s-audiobook-val"></span></div>
+      </div>
+
+      <p class="hint" id="sp-status">🎵 Music always plays in full. Ambient background plays gently under spoken news, podcasts & audiobooks. Summaries use your browser voice — see docs/VOICE_AND_TTS.md for premium voices.</p>
     </section>
 
     <section class="nowcard">
@@ -118,10 +137,12 @@
     </section>
 
     <audio id="audio"></audio>
+    <audio id="bed" loop></audio>
   </main>
 
   <script src="config.js"></script>
   <script src="spotify.js"></script>
+  <script src="wispr.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

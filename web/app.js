@@ -11,12 +11,19 @@ const $ = (id) => document.getElementById(id);
 const els = {
   status: $("status"), onboarding: $("onboarding"), player: $("player"),
   mode: $("mode"), explanation: $("explanation"), queue: $("queue"),
-  gear: $("gear"), settings: $("settings"), spotify: $("spotify"), spStatus: $("sp-status"),
+  gear: $("gear"), settings: $("settings"), spStatus: $("sp-status"),
+  obSpotify: $("ob-spotify"), obSpotifyStatus: $("ob-spotify-status"),
   npBadge: $("np-badge"), npTitle: $("np-title"), npSub: $("np-sub"), npNote: $("np-note"),
   npProgress: $("np-progress"), npBar: $("np-bar"), npCur: $("np-cur"), npRem: $("np-rem"),
   prev: $("prev"), back10: $("back10"), toggle: $("toggle"), fwd10: $("fwd10"), next: $("next"),
-  like: $("like"), save: $("save"), dislike: $("dislike"), audio: $("audio"),
+  like: $("like"), save: $("save"), dislike: $("dislike"), audio: $("audio"), bed: $("bed"),
 };
+
+// Gentle ambient bed under spoken news / podcasts / audiobooks.
+const BED_URL = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3";
+els.bed.src = BED_URL; els.bed.volume = 0.08;
+function startBed() { try { els.bed.currentTime = els.bed.currentTime || 0; els.bed.play().catch(() => {}); } catch {} }
+function stopBed() { try { els.bed.pause(); } catch {} }
 
 let live = false;
 let profile = {};
@@ -86,17 +93,28 @@ function contextsFrom(text) {
   return out;
 }
 
-// ---------- dictation ----------
+// ---------- dictation (Wispr Flow if configured, else browser speech) ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const append = (ta, text) => { ta.value += (ta.value ? " " : "") + String(text).trim(); };
 document.querySelectorAll(".mic").forEach((btn) => {
-  if (!SR) { btn.style.display = "none"; return; }
-  let rec = null;
-  btn.onclick = () => {
+  const ta = $(btn.dataset.target);
+  let wispr = false, rec = null;
+  btn.onclick = async () => {
+    // Stop whatever is running
+    if (wispr) { MyRadioWispr.stop(); wispr = false; btn.classList.remove("rec"); return; }
     if (rec) { rec.stop(); return; }
+    // Prefer Wispr Flow
+    if (window.MyRadioWispr && await MyRadioWispr.isConfigured()) {
+      btn.classList.add("rec"); wispr = true;
+      const ok = await MyRadioWispr.start(ta, (text) => append(ta, text));
+      if (!ok) { wispr = false; btn.classList.remove("rec"); }
+      return;
+    }
+    // Fallback: browser dictation
+    if (!SR) { btn.title = "Dictation needs Wispr Flow (add API key) or a supported browser"; return; }
     rec = new SR(); rec.lang = "en-US"; rec.interimResults = false; rec.continuous = true;
-    const ta = $(btn.dataset.target);
     btn.classList.add("rec");
-    rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) ta.value += (ta.value ? " " : "") + e.results[i][0].transcript.trim(); };
+    rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) append(ta, e.results[i][0].transcript); };
     rec.onend = () => { btn.classList.remove("rec"); rec = null; };
     rec.start();
   };
@@ -127,6 +145,7 @@ $("ob-start").onclick = async () => {
     interestsText: interests, musicText: music,
   };
   persist();
+  try { localStorage.removeItem("myradio_draft"); } catch {}
   startPlayer(await onboard());
 };
 
@@ -170,10 +189,28 @@ document.querySelectorAll(".settings .seg[data-type]").forEach((seg) => seg.addE
   summaryPrefs[seg.dataset.type] = b.dataset.v; persist();
   if (queue[index]?.type === seg.dataset.type) loadCurrent(false);
 }));
+// Settings length sliders — re-tune lengths mid-session.
+["news", "podcast", "audiobook"].forEach((type) => {
+  const input = $("s-" + type), val = $("s-" + type + "-val"); if (!input) return;
+  input.addEventListener("input", () => {
+    const v = Number(input.value);
+    val.textContent = lenLabel(type, v); LENGTHS[type] = lenSeconds(type, v); persist();
+    if (queue[index]?.type === type) loadCurrent(false);
+  });
+});
+function initSettingsSliders() {
+  ["news", "podcast", "audiobook"].forEach((type) => {
+    const input = $("s-" + type), val = $("s-" + type + "-val"); if (!input) return;
+    const sec = LENGTHS[type];
+    input.value = type === "news" ? sec : (sec === 0 ? 16 : Math.round(sec / 60));
+    val.textContent = lenLabel(type, Number(input.value));
+  });
+}
 
 // ---------- player ----------
 function startPlayer(plan) {
   els.onboarding.hidden = true; els.player.hidden = false;
+  initSettingsSliders();
   applyPlan(plan); index = 0; history.length = 0; loadCurrent(true);
 }
 function applyPlan(plan) {
@@ -260,9 +297,9 @@ function noteFor(item, d) {
 }
 
 function startPlayback(d) {
-  if (d.kind === "audio") { els.audio.src = d.audioUrl; playAudio(); }
-  else if (d.kind === "speak") { startSpeakFrom(d.text, 0); }
-  else if (d.kind === "spotify") { startSpotify(d.uri); }
+  if (d.kind === "audio") { els.audio.src = d.audioUrl; playAudio(); stopBed(); }
+  else if (d.kind === "speak") { startSpeakFrom(d.text, 0); startBed(); }  // gentle ambient under speech
+  else if (d.kind === "spotify") { startSpotify(d.uri); stopBed(); }
   event("play");
 }
 function stopPlayback() {
@@ -271,6 +308,7 @@ function stopPlayback() {
   clearInterval(speakTimer); speakTimer = null;
   clearInterval(spPoll); spPoll = null;
   if (window.MyRadioSpotify && MyRadioSpotify.isReady()) MyRadioSpotify.pause();
+  stopBed();
   setToggle(false);
 }
 
@@ -321,9 +359,9 @@ async function startSpotify(uri) {
 els.toggle.onclick = () => {
   if (mode === "audio") { els.audio.getAttribute("src") && (els.audio.paused ? playAudio() : (els.audio.pause(), setToggle(false))); }
   else if (mode === "speak") {
-    if (speechSynthesis.speaking && !speechSynthesis.paused) { speechSynthesis.pause(); stopSpeakTimer(); setToggle(false); }
-    else if (speechSynthesis.paused) { speechSynthesis.resume(); startSpeakTimer(); setToggle(true); }
-    else startSpeakFrom(speakText, speakPos);
+    if (speechSynthesis.speaking && !speechSynthesis.paused) { speechSynthesis.pause(); stopSpeakTimer(); stopBed(); setToggle(false); }
+    else if (speechSynthesis.paused) { speechSynthesis.resume(); startSpeakTimer(); startBed(); setToggle(true); }
+    else { startSpeakFrom(speakText, speakPos); startBed(); }
   } else if (mode === "spotify") { MyRadioSpotify.togglePlay(); }
 };
 els.back10.onclick = () => skipBy(-10);
@@ -393,15 +431,34 @@ function chime() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fmt = (s = 0) => { s = Math.floor(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
-// ---------- Spotify wiring ----------
-els.spotify.onclick = () => MyRadioSpotify.connect();
+// ---------- Spotify wiring (connect from onboarding) ----------
+els.obSpotify.onclick = () => { saveDraft(); MyRadioSpotify.connect(); };
 function updateSpotifyUI() {
   if (!spotifyCtx) return;
-  els.spotify.classList.add("connected");
-  els.spotify.textContent = spotifyCtx.premium ? `Spotify ✓ ${spotifyCtx.displayName || ""}`.trim() : "Spotify (no Premium)";
-  els.spStatus.textContent = spotifyCtx.premium
-    ? `🎵 Connected to Spotify Premium — your top tracks & ${spotifyCtx.genres.slice(0, 4).join(", ")} are in the mix.`
-    : "🎵 Connected, but Premium is required for full-track playback — using royalty-free music meanwhile.";
+  const premium = spotifyCtx.premium;
+  els.obSpotify.classList.add("connected");
+  els.obSpotify.textContent = premium ? `Spotify ✓ ${spotifyCtx.displayName || ""}`.trim() : "Spotify connected";
+  els.obSpotifyStatus.textContent = premium
+    ? `Premium — your top tracks & ${(spotifyCtx.genres || []).slice(0, 3).join(", ")} are in the mix.`
+    : "No Premium detected — we'll use royalty-free music + iTunes podcasts.";
+  els.spStatus.textContent = premium
+    ? "🎵 Spotify Premium connected — full-track music from your library; ambient bed under spoken content."
+    : "🎵 Connected, but Premium is needed for full-track playback. Ambient bed plays under spoken content.";
+}
+
+// Preserve onboarding answers across the Spotify login redirect.
+function saveDraft() {
+  try { localStorage.setItem("myradio_draft", JSON.stringify({
+    name: $("ob-name").value, interests: $("ob-interests").value, music: $("ob-music").value, when: $("ob-when").value,
+    lens: { news: $("len-news").value, podcast: $("len-podcast").value, audiobook: $("len-audiobook").value },
+  })); } catch {}
+}
+function loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem("myradio_draft") || "null"); if (!d) return;
+    $("ob-name").value = d.name || ""; $("ob-interests").value = d.interests || ""; $("ob-music").value = d.music || ""; $("ob-when").value = d.when || "";
+    if (d.lens) ["news", "podcast", "audiobook"].forEach((k) => { const i = $("len-" + k); if (i && d.lens[k] != null) { i.value = d.lens[k]; i.dispatchEvent(new Event("input")); } });
+  } catch {}
 }
 
 // ---------- local fallback ----------
@@ -423,7 +480,7 @@ function localPlan() {
 (async () => {
   await checkHealth();
   if (window.MyRadioSpotify) {
-    const fresh = await MyRadioSpotify.handleRedirect();
+    await MyRadioSpotify.handleRedirect();
     if (MyRadioSpotify.isConnected()) {
       try {
         spotifyCtx = await MyRadioSpotify.loadContext();
@@ -431,7 +488,7 @@ function localPlan() {
         updateSpotifyUI();
       } catch {}
     }
-    if (fresh && restore()) { startPlayer(await onboard()); return; } // resumed after Spotify login
   }
-  if (restore()) startPlayer(await onboard()); // returning user
+  if (restore()) startPlayer(await onboard()); // returning user with a built station
+  else loadDraft();                            // first-timer (incl. after Spotify login) — refill the interview
 })();

@@ -101,6 +101,26 @@ const server = createServer(async (req, res) => {
       } catch (e) { return send(res, 200, { text: "", error: String(e?.message || e) }); }
     }
 
+    // Mint a short-lived Wispr Flow client access token from the org API key.
+    // The browser uses this to open the dictation WebSocket directly (low latency).
+    if (req.method === "GET" && url.pathname === "/api/wispr-token") {
+      const key = process.env.WISPR_FLOW_API_KEY;
+      const ws = process.env.WISPR_WS_URL || "wss://platform-api.wisprflow.ai/api/v1/dash/ws";
+      if (!key) return send(res, 200, { configured: false });
+      try {
+        const r = await fetch("https://platform-api.wisprflow.ai/api/v1/dash/generate_access_token", {
+          method: "POST",
+          headers: { authorization: "Bearer " + key, "content-type": "application/json" },
+          body: JSON.stringify({ client_id: "myradio-web", duration_secs: 3600 }),
+        });
+        if (!r.ok) return send(res, 200, { configured: true, error: `token ${r.status}` });
+        const j = await r.json();
+        return send(res, 200, { configured: true, access_token: j.access_token, expires_in: j.expires_in, ws });
+      } catch (e) {
+        return send(res, 200, { configured: true, error: String(e?.message || e) });
+      }
+    }
+
     if (req.method === "GET" && url.pathname.startsWith("/api/profile/")) {
       const userId = decodeURIComponent(url.pathname.split("/").pop());
       return send(res, 200, getProfile(userId));
