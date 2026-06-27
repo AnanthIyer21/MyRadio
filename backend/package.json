@@ -1,0 +1,11 @@
+{
+  "name": "myradio-backend",
+  "version": "0.1.0",
+  "description": "MyRadio AI personal radio backend",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}
