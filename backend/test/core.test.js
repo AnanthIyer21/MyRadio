@@ -1,29 +1,42 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectContext } from "../src/context.js";
-import { planSession } from "../src/planner.js";
+import { scoreAndDiversify, scoreItem } from "../src/planner.js";
+import { musicAgent } from "../src/agents/music.js";
 
 test("context agent detects morning commute on a weekday", () => {
-  const ctx = detectContext({ localHour: 8, dayOfWeek: 2 });
-  assert.equal(ctx.mode, "morning_commute");
+  assert.equal(detectContext({ localHour: 8, dayOfWeek: 2 }).mode, "morning_commute");
 });
 
 test("workout activity overrides time-based mode", () => {
-  const ctx = detectContext({ localHour: 8, dayOfWeek: 2, activity: "workout" });
-  assert.equal(ctx.mode, "workout");
+  assert.equal(detectContext({ localHour: 8, dayOfWeek: 2, activity: "workout" }).mode, "workout");
 });
 
-test("planner returns a ranked cross-format queue", () => {
-  const ctx = detectContext({ localHour: 8, dayOfWeek: 2 });
-  const plan = planSession({ context: ctx, profile: { rewards: {} } });
-  assert.ok(plan.queue.length > 0);
-  assert.ok(plan.queue[0].score >= plan.queue[plan.queue.length - 1].score);
+test("music agent returns playable royalty-free tracks", async () => {
+  const ctx = detectContext({ localHour: 8, dayOfWeek: 2, activity: "workout" });
+  const tracks = await musicAgent({}, ctx);
+  assert.ok(tracks.length > 0);
+  assert.ok(tracks.every((t) => t.audioUrl?.startsWith("https://")));
+  // Workout context should favour higher-energy tracks first.
+  assert.ok(tracks[0].energy >= 0.6);
 });
 
 test("explicit rewards lift an item's score", () => {
   const ctx = detectContext({ localHour: 8, dayOfWeek: 2 });
-  const base = planSession({ context: ctx, profile: { rewards: {} } });
-  const boosted = planSession({ context: ctx, profile: { rewards: { "book-1": 5 } } });
-  assert.equal(boosted.queue[0].id, "book-1");
-  assert.notEqual(base.queue[0].id, "book-1");
+  const item = { id: "x1", type: "music", energy: 0.5 };
+  const base = scoreItem(item, { rewards: {} }, ctx);
+  const boosted = scoreItem(item, { rewards: { x1: 5 } }, ctx);
+  assert.ok(boosted > base);
+});
+
+test("diversify returns a balanced cross-format queue", () => {
+  const items = [
+    { id: "n1", type: "news", energy: 0.4 }, { id: "n2", type: "news", energy: 0.4 },
+    { id: "m1", type: "music", energy: 0.8 }, { id: "m2", type: "music", energy: 0.5 },
+    { id: "p1", type: "podcast", energy: 0.5 }, { id: "b1", type: "audiobook", energy: 0.3 },
+  ];
+  const ctx = detectContext({ localHour: 8, dayOfWeek: 2 });
+  const q = scoreAndDiversify(items, {}, ctx, 4);
+  assert.equal(q.length, 4);
+  assert.ok(new Set(q.map((i) => i.type)).size >= 3, "queue should span multiple formats");
 });

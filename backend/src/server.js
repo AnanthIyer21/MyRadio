@@ -1,8 +1,9 @@
-// Minimal zero-dependency HTTP server for the MyRadio MVP.
-// Endpoints: GET /health, POST /api/session-plan, POST /api/events
+// Zero-dependency HTTP server for the MyRadio MVP.
+// Endpoints: GET /health, POST /api/onboarding, POST /api/session-plan,
+//            POST /api/events, GET /api/profile/:userId
 import { createServer } from "node:http";
 import { detectContext } from "./context.js";
-import { planSession } from "./planner.js";
+import { orchestrate } from "./agents/orchestrator.js";
 
 const PORT = process.env.PORT || 8787;
 
@@ -10,7 +11,7 @@ const PORT = process.env.PORT || 8787;
 const profiles = new Map();
 
 function getProfile(userId = "demo") {
-  if (!profiles.has(userId)) profiles.set(userId, { rewards: {} });
+  if (!profiles.has(userId)) profiles.set(userId, { rewards: {}, contentMix: { music: 40, news: 25, podcast: 20, audiobook: 15 } });
   return profiles.get(userId);
 }
 
@@ -36,26 +37,53 @@ const server = createServer(async (req, res) => {
     return res.end();
   }
 
-  if (req.method === "GET" && url.pathname === "/health") {
-    return send(res, 200, { ok: true, service: "myradio-backend", version: "0.1.0" });
-  }
+  try {
+    if (req.method === "GET" && url.pathname === "/health") {
+      return send(res, 200, { ok: true, service: "myradio-backend", version: "0.2.0" });
+    }
 
-  if (req.method === "POST" && url.pathname === "/api/session-plan") {
-    const body = await readJson(req);
-    const context = detectContext(body.signals || {});
-    const profile = getProfile(body.userId);
-    return send(res, 200, { context, ...planSession({ context, profile }) });
-  }
+    // Onboarding interview -> store taste profile -> return profile + first station.
+    if (req.method === "POST" && url.pathname === "/api/onboarding") {
+      const body = await readJson(req);
+      const userId = body.userId || "demo";
+      const profile = getProfile(userId);
+      Object.assign(profile, {
+        name: body.name || profile.name,
+        topics: body.topics || profile.topics || [],
+        musicVibe: body.musicVibe || profile.musicVibe,
+        contexts: body.contexts || profile.contexts || [],
+        contentMix: body.contentMix || profile.contentMix,
+      });
+      const context = detectContext(body.signals || {});
+      const plan = await orchestrate(profile, context);
+      return send(res, 200, { profile, context, ...plan });
+    }
 
-  if (req.method === "POST" && url.pathname === "/api/events") {
-    const { userId, itemId, type } = await readJson(req);
-    if (!itemId || !type) return send(res, 400, { error: "itemId and type required" });
-    const profile = getProfile(userId);
-    profile.rewards[itemId] = (profile.rewards[itemId] || 0) + (REWARD[type] || 0);
-    return send(res, 200, { ok: true, itemId, reward: profile.rewards[itemId] });
-  }
+    if (req.method === "POST" && url.pathname === "/api/session-plan") {
+      const body = await readJson(req);
+      const context = detectContext(body.signals || {});
+      const profile = getProfile(body.userId);
+      const plan = await orchestrate(profile, context);
+      return send(res, 200, { context, ...plan });
+    }
 
-  return send(res, 404, { error: "not found" });
+    if (req.method === "POST" && url.pathname === "/api/events") {
+      const { userId, itemId, type } = await readJson(req);
+      if (!itemId || !type) return send(res, 400, { error: "itemId and type required" });
+      const profile = getProfile(userId);
+      profile.rewards[itemId] = (profile.rewards[itemId] || 0) + (REWARD[type] || 0);
+      return send(res, 200, { ok: true, itemId, reward: profile.rewards[itemId] });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/profile/")) {
+      const userId = decodeURIComponent(url.pathname.split("/").pop());
+      return send(res, 200, getProfile(userId));
+    }
+
+    return send(res, 404, { error: "not found" });
+  } catch (err) {
+    return send(res, 500, { error: String(err?.message || err) });
+  }
 });
 
 server.listen(PORT, () => console.log(`MyRadio backend on http://localhost:${PORT}`));

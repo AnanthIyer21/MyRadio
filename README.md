@@ -15,14 +15,41 @@ later, after licensing.
 
 ```
 MyRadio/
-├── backend/          Node API: context, planner, personalization, content agents
-│   ├── src/
-│   └── package.json
-├── docs/             Product spec + architecture
-├── web/              (later) browser demo client
+├── backend/
+│   └── src/
+│       ├── agents/        specialist agents + orchestrator
+│       │   ├── news.js        RSS news, matched to the listener's topics
+│       │   ├── podcasts.js     RSS episodes (real, playable audio)
+│       │   ├── audiobooks.js   public-domain books via Gutendex
+│       │   ├── music.js        royalty-free, directly playable tracks
+│       │   └── orchestrator.js fans out to all agents, scores + diversifies
+│       ├── lib/           http + rss helpers
+│       ├── context.js     raw signals -> listening mode
+│       ├── planner.js     scoring + diversification
+│       └── server.js      REST API
+├── web/              onboarding interview + audio player
+├── docs/             product spec + architecture
 ├── ios/              (later) SwiftUI app
 └── database/         (later) Postgres schema
 ```
+
+## How It Works
+
+1. The **onboarding interview** (web landing page) captures name, topics, music vibe, and listening contexts.
+2. The **orchestrator agent** fans out to the news, podcast, audiobook, and music agents in parallel.
+3. Each specialist agent fetches **real, live content** (Guardian RSS, Gutendex, royalty-free MP3s).
+4. The **planner** scores every candidate (context-energy match + taste rewards + content-mix preference + freshness) and round-robins types into a balanced queue.
+5. The player streams audio, and **like / save / skip / dislike** events update the taste profile so the next plan improves.
+
+### API
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | liveness |
+| `POST /api/onboarding` | interview answers → profile + first station |
+| `POST /api/session-plan` | context-aware queue via the orchestrator |
+| `POST /api/events` | play / skip / like / save / dislike feedback |
+| `GET /api/profile/:userId` | current taste profile |
 
 ## Run The Backend
 
@@ -34,11 +61,20 @@ npm start
 
 API runs on `http://localhost:8787`. Health check: `GET /health`.
 
+## Run The Web App
+
+```bash
+cd web && python3 -m http.server 8080   # then open http://localhost:8080
+```
+
+Start the backend too (above) for live content + personalization; without it the
+app runs in a local demo mode that still plays music.
+
 ## Status
 
-Early scaffold — fresh start. Backend exposes a health check and a stubbed
-session-plan endpoint. See `docs/MVP_SPEC.md` for scope and `docs/ARCHITECTURE.md`
-for the agent design and build roadmap.
+Working vertical slice: onboarding interview → orchestrated, **live** cross-format
+station → audio player with go-back / skip and taste-learning feedback.
+See `docs/MVP_SPEC.md` for scope and `docs/ARCHITECTURE.md` for the agent design.
 
 ## Product Constraints (carry these through every feature)
 

@@ -3,46 +3,103 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MyRadio AI — demo</title>
+  <title>MyRadio AI</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="app">
-    <header>
-      <h1>MyRadio<span class="ai">AI</span></h1>
-      <span id="status" class="status">connecting…</span>
-    </header>
+  <div class="topbar">
+    <h1>MyRadio<span class="ai">AI</span></h1>
+    <span id="status" class="status">connecting…</span>
+  </div>
 
-    <section class="now">
-      <div class="context">
-        <div id="mode" class="mode">—</div>
-        <div id="explanation" class="explanation">Tap play to build your station.</div>
+  <!-- ===== Onboarding interview (landing) ===== -->
+  <main id="onboarding" class="screen onboarding">
+    <h2 class="lead">Let's tune your station.</h2>
+    <p class="sub">A few quick questions so MyRadio knows what to play.</p>
+
+    <label class="field">
+      <span>What should we call you?</span>
+      <input id="ob-name" type="text" placeholder="Your name" autocomplete="off" />
+    </label>
+
+    <div class="field">
+      <span>What do you want to hear about?</span>
+      <div id="ob-topics" class="chips" data-multi="true">
+        <button data-v="world">🌍 World</button>
+        <button data-v="technology">💻 Technology</button>
+        <button data-v="business">📈 Business</button>
+        <button data-v="science">🔬 Science</button>
+        <button data-v="sport">⚽ Sport</button>
+        <button data-v="culture">🎭 Culture</button>
+        <button data-v="politics">🏛 Politics</button>
       </div>
+    </div>
 
-      <div class="controls">
-        <label class="sim">
-          Simulate hour
-          <input id="hour" type="range" min="0" max="23" value="8" />
-          <span id="hourLabel">08:00</span>
-        </label>
-        <label class="sim">
-          Activity
-          <select id="activity">
-            <option value="">auto (by time)</option>
-            <option value="focus">focus</option>
-            <option value="workout">workout</option>
-            <option value="walking">walking</option>
-          </select>
-        </label>
-        <button id="play" class="play">▶ Play my station</button>
+    <div class="field">
+      <span>What's your music vibe?</span>
+      <div id="ob-vibe" class="chips" data-multi="false">
+        <button data-v="upbeat">⚡ Upbeat</button>
+        <button data-v="focus">🎧 Focus</button>
+        <button data-v="chill">🌙 Chill</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span>When do you usually listen?</span>
+      <div id="ob-contexts" class="chips" data-multi="true">
+        <button data-v="commute">🚆 Commute</button>
+        <button data-v="workout">🏋️ Workout</button>
+        <button data-v="focus">📚 Focus / work</button>
+        <button data-v="walking">🚶 Walking</button>
+        <button data-v="evening">🛋 Evening</button>
+      </div>
+    </div>
+
+    <button id="ob-start" class="primary">Build my station →</button>
+  </main>
+
+  <!-- ===== Player ===== -->
+  <main id="player" class="screen player" hidden>
+    <div class="context-bar">
+      <div>
+        <div id="mode" class="mode">—</div>
+        <div id="explanation" class="explanation"></div>
+      </div>
+      <label class="sim">
+        hour
+        <input id="hour" type="range" min="0" max="23" value="8" />
+        <span id="hourLabel">08</span>
+      </label>
+    </div>
+
+    <section class="nowcard">
+      <div id="np-badge" class="badge">—</div>
+      <div id="np-title" class="np-title">Tap play</div>
+      <div id="np-sub" class="np-sub"></div>
+      <div id="np-note" class="np-note"></div>
+
+      <div class="progress"><div id="np-bar" class="bar"></div></div>
+
+      <div class="transport">
+        <button id="prev" class="t" title="Go back">⏮</button>
+        <button id="toggle" class="t big" title="Play / pause">▶</button>
+        <button id="next" class="t" title="Skip">⏭</button>
+      </div>
+      <div class="reactions">
+        <button id="like" class="r" title="Like">♥ Like</button>
+        <button id="save" class="r" title="Save">⤓ Save</button>
+        <button id="dislike" class="r" title="Less like this">✕ Less</button>
       </div>
     </section>
 
     <section class="queue">
-      <h2>Up next</h2>
+      <h3>Up next</h3>
       <ul id="queue"></ul>
     </section>
+
+    <audio id="audio"></audio>
   </main>
+
   <script src="app.js"></script>
 </body>
 </html>

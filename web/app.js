@@ -1,132 +1,221 @@
-// MyRadio web demo: talks to the backend, falls back to a local plan if it's down.
+// MyRadio web client: onboarding interview -> orchestrated station -> audio player.
 const API = "http://localhost:8787";
+const USER = "demo";
 
+const $ = (id) => document.getElementById(id);
 const els = {
-  status: document.getElementById("status"),
-  mode: document.getElementById("mode"),
-  explanation: document.getElementById("explanation"),
-  queue: document.getElementById("queue"),
-  play: document.getElementById("play"),
-  hour: document.getElementById("hour"),
-  hourLabel: document.getElementById("hourLabel"),
-  activity: document.getElementById("activity"),
+  status: $("status"), onboarding: $("onboarding"), player: $("player"),
+  mode: $("mode"), explanation: $("explanation"), queue: $("queue"),
+  hour: $("hour"), hourLabel: $("hourLabel"),
+  npBadge: $("np-badge"), npTitle: $("np-title"), npSub: $("np-sub"), npNote: $("np-note"), npBar: $("np-bar"),
+  prev: $("prev"), toggle: $("toggle"), next: $("next"),
+  like: $("like"), save: $("save"), dislike: $("dislike"),
+  audio: $("audio"),
 };
 
-const USER = "demo";
 let live = false;
+let profile = { topics: [], musicVibe: null, contexts: [] };
+let queue = [];
+let index = 0;
+const history = []; // previously played indices, for "go back"
 
+// ---------- connectivity ----------
 async function checkHealth() {
-  try {
-    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(1500) });
-    live = r.ok;
-  } catch { live = false; }
+  try { live = (await fetch(`${API}/health`, { signal: AbortSignal.timeout(1500) })).ok; }
+  catch { live = false; }
   els.status.textContent = live ? "backend live" : "local mode";
   els.status.className = "status " + (live ? "live" : "local");
 }
 
 function signals() {
-  const localHour = Number(els.hour.value);
-  const day = new Date().getDay(); // 0 Sun .. 6 Sat
-  return { localHour, dayOfWeek: day === 0 ? 7 : day, activity: els.activity.value || undefined };
+  const day = new Date().getDay();
+  return { localHour: Number(els.hour.value), dayOfWeek: day === 0 ? 7 : day, activity: activityFromContexts() };
+}
+function activityFromContexts() {
+  const c = profile.contexts || [];
+  if (c.includes("workout")) return "workout";
+  if (c.includes("focus")) return "focus";
+  if (c.includes("walking")) return "walking";
+  return undefined;
+}
+
+// ---------- onboarding ----------
+function wireChips(containerId) {
+  const box = $(containerId);
+  const multi = box.dataset.multi === "true";
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest("button"); if (!btn) return;
+    if (!multi) box.querySelectorAll("button").forEach((b) => b !== btn && b.classList.remove("on"));
+    btn.classList.toggle("on");
+  });
+}
+function chipValues(containerId) {
+  return [...$(containerId).querySelectorAll("button.on")].map((b) => b.dataset.v);
+}
+
+["ob-topics", "ob-vibe", "ob-contexts"].forEach(wireChips);
+
+$("ob-start").onclick = async () => {
+  profile = {
+    name: $("ob-name").value.trim(),
+    topics: chipValues("ob-topics"),
+    musicVibe: chipValues("ob-vibe")[0] || null,
+    contexts: chipValues("ob-contexts"),
+  };
+  const plan = await onboard();
+  startPlayer(plan);
+};
+
+async function onboard() {
+  if (live) {
+    try {
+      const r = await fetch(`${API}/api/onboarding`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: USER, ...profile, signals: signals() }),
+      });
+      if (r.ok) return r.json();
+    } catch { /* fall through */ }
+  }
+  return localPlan();
+}
+
+// ---------- player ----------
+function startPlayer(plan) {
+  els.onboarding.hidden = true;
+  els.player.hidden = false;
+  applyPlan(plan);
+  index = 0; history.length = 0;
+  loadCurrent(true);
+}
+
+function applyPlan(plan) {
+  els.mode.textContent = (plan.mode || "idle").replace(/_/g, " ");
+  els.explanation.textContent = plan.explanation || "";
+  queue = plan.queue || [];
 }
 
 async function getPlan() {
   if (live) {
     try {
       const r = await fetch(`${API}/api/session-plan`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ userId: USER, signals: signals() }),
       });
       if (r.ok) return r.json();
     } catch { /* fall through */ }
   }
-  return localPlan(signals());
+  return localPlan();
 }
 
-async function sendEvent(itemId, type) {
-  if (!live) return;
+function loadCurrent(autoplay = false) {
+  const item = queue[index];
+  if (!item) return;
+  els.npBadge.textContent = item.type;
+  els.npBadge.className = "badge " + item.type;
+  els.npTitle.textContent = item.title;
+  els.npSub.textContent = item.subtitle || item.source || "";
+  resetReactions();
+  renderQueue();
+
+  if (item.audioUrl) {
+    els.npNote.textContent = "";
+    els.audio.src = item.audioUrl;
+    if (autoplay) play();
+    else { els.audio.load(); setToggle(false); }
+  } else {
+    // Text item (news / book): spoken summary via TTS comes later.
+    els.audio.removeAttribute("src");
+    els.npNote.textContent = "🔊 Spoken summary coming soon — press ⏭ for the next track.";
+    setToggle(false);
+    els.npBar.style.width = "0%";
+  }
+}
+
+function play() { els.audio.play().then(() => setToggle(true)).catch(() => setToggle(false)); event("play"); }
+function pause() { els.audio.pause(); setToggle(false); }
+function setToggle(playing) { els.toggle.textContent = playing ? "❚❚" : "▶"; }
+
+els.toggle.onclick = () => {
+  const item = queue[index];
+  if (!item?.audioUrl) return; // nothing to play for text items
+  els.audio.paused ? play() : pause();
+};
+
+els.next.onclick = () => { event("skip"); advance(); };
+
+els.prev.onclick = () => {
+  if (els.audio.currentTime > 3) { els.audio.currentTime = 0; return; } // restart if mid-track
+  if (history.length) { index = history.pop(); loadCurrent(true); }
+  else { index = 0; loadCurrent(true); }
+};
+
+async function advance() {
+  history.push(index);
+  index += 1;
+  if (index >= queue.length) {
+    const plan = await getPlan();           // re-plan with updated rewards
+    applyPlan(plan);
+    index = 0; history.length = 0;
+  }
+  loadCurrent(true);
+}
+
+els.audio.onended = () => { event("complete"); advance(); };
+els.audio.ontimeupdate = () => {
+  if (els.audio.duration) els.npBar.style.width = (els.audio.currentTime / els.audio.duration * 100) + "%";
+};
+
+// ---------- reactions ----------
+function resetReactions() { [els.like, els.save, els.dislike].forEach((b) => b.classList.remove("on")); }
+els.like.onclick = () => { els.like.classList.toggle("on"); event("like"); };
+els.save.onclick = () => { els.save.classList.toggle("on"); event("save"); };
+els.dislike.onclick = () => { els.dislike.classList.add("on"); event("dislike"); setTimeout(() => { event("skip"); advance(); }, 250); };
+
+async function event(type) {
+  const item = queue[index]; if (!item || !live) return;
   try {
     await fetch(`${API}/api/events`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: USER, itemId, type }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: USER, itemId: item.id, type }),
     });
   } catch { /* ignore in demo */ }
 }
 
-function render(plan) {
-  els.mode.textContent = (plan.mode || "idle").replace(/_/g, " ");
-  els.explanation.textContent = plan.explanation || "";
+function renderQueue() {
   els.queue.innerHTML = "";
-
-  plan.queue.forEach((item, i) => {
+  queue.forEach((item, i) => {
     const li = document.createElement("li");
-    li.className = "card" + (i === 0 ? " playing" : "");
+    li.className = "row" + (i === index ? " playing" : "");
     li.innerHTML = `
       <span class="badge ${item.type}">${item.type}</span>
       <div class="meta">
-        <div class="title">${item.title}</div>
-        <div class="sub">${fmt(item.durationSec)} · <span class="score">score ${item.score ?? "—"}</span></div>
+        <div class="rt">${item.title}</div>
+        <div class="rs">${item.subtitle || item.source || ""}</div>
       </div>
-      <div class="actions">
-        <button class="like" title="Like">♥</button>
-        <button class="save" title="Save">⤓</button>
-        <button class="skip" title="Skip">⏭</button>
-        <button class="dislike" title="Less like this">✕</button>
-      </div>`;
-    const [like, save, skip, dislike] = li.querySelectorAll("button");
-    like.onclick = () => react(item.id, "like");
-    save.onclick = () => react(item.id, "save");
-    skip.onclick = () => react(item.id, "skip");
-    dislike.onclick = () => react(item.id, "dislike");
+      ${item.audioUrl ? '<span class="has-audio">▶ audio</span>' : ""}`;
+    li.onclick = () => { if (i !== index) { history.push(index); index = i; loadCurrent(true); } };
     els.queue.appendChild(li);
   });
 }
 
-async function react(itemId, type) {
-  await sendEvent(itemId, type);
-  // Re-plan so the user can see personalization shift the queue.
-  render(await getPlan());
+// ---------- local fallback (works with no backend) ----------
+const LOCAL_MUSIC = [
+  { n: 1, title: "Neon Drive", energy: 0.85, vibe: "upbeat" },
+  { n: 9, title: "Afterglow", energy: 0.75, vibe: "upbeat" },
+  { n: 3, title: "Pulse Theory", energy: 0.6, vibe: "focus" },
+  { n: 2, title: "Glass Horizon", energy: 0.35, vibe: "chill" },
+].map((t) => ({ id: `mus-sh${t.n}`, type: "music", title: t.title, subtitle: `${t.vibe} · royalty-free`,
+  source: "SoundHelix", energy: t.energy, audioUrl: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${t.n}.mp3` }));
+
+function localPlan() {
+  const q = [
+    { id: "news-x", type: "news", title: "Your briefing (offline demo)", subtitle: "seed", energy: 0.4, audioUrl: null },
+    ...LOCAL_MUSIC,
+    { id: "book-x", type: "audiobook", title: "Public-domain classic, ch.1", subtitle: "seed", energy: 0.3, audioUrl: null },
+  ];
+  return { mode: "idle", explanation: "Local demo — start the backend for live, personalized content.", queue: q };
 }
 
-function fmt(sec = 0) {
-  const m = Math.floor(sec / 60), s = sec % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-// --- Local fallback so the demo works with no backend ---
-const SEED = [
-  { id: "news-1", type: "news", title: "Morning briefing", durationSec: 180, energy: 0.4 },
-  { id: "pod-1", type: "podcast", title: "Tech in 10", durationSec: 600, energy: 0.5 },
-  { id: "book-1", type: "audiobook", title: "Public-domain classic, ch.1", durationSec: 900, energy: 0.3 },
-  { id: "music-1", type: "music", title: "Upbeat focus instrumental", durationSec: 210, energy: 0.8 },
-  { id: "music-2", type: "music", title: "Calm evening ambient", durationSec: 240, energy: 0.2 },
-];
-const MODE_ENERGY = { morning_commute: 0.6, evening_commute: 0.5, focus_block: 0.7, workout: 0.9, walking: 0.5, evening_wind_down: 0.25, idle: 0.5 };
-
-function localMode({ localHour, dayOfWeek, activity }) {
-  const weekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-  if (activity === "workout") return "workout";
-  if (activity === "walking") return "walking";
-  if (activity === "focus") return "focus_block";
-  if (weekday && localHour >= 6 && localHour <= 9) return "morning_commute";
-  if (weekday && localHour >= 16 && localHour <= 19) return "evening_commute";
-  if (localHour >= 20 || localHour < 6) return "evening_wind_down";
-  return "idle";
-}
-
-function localPlan(sig) {
-  const mode = localMode(sig);
-  const target = MODE_ENERGY[mode] ?? 0.5;
-  const queue = SEED
-    .map((it) => ({ ...it, score: Number((1 - Math.abs(it.energy - target) + (it.type === "news" ? 0.2 : 0)).toFixed(3)) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4);
-  return { mode, explanation: "Local demo mode — start the backend for live personalization.", queue };
-}
-
-els.hour.oninput = () => { els.hourLabel.textContent = String(els.hour.value).padStart(2, "0") + ":00"; };
-els.play.onclick = async () => render(await getPlan());
-
-(async () => { await checkHealth(); render(await getPlan()); })();
+// ---------- boot ----------
+els.hour.oninput = () => { els.hourLabel.textContent = String(els.hour.value).padStart(2, "0"); };
+(async () => { await checkHealth(); })();
