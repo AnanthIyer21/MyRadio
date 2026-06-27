@@ -102,12 +102,17 @@ document.querySelectorAll(".mic").forEach((btn) => {
   };
 });
 
-// length selectors (onboarding)
-document.querySelectorAll(".seg[data-len]").forEach((seg) => seg.addEventListener("click", (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  seg.querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on");
-  LENGTHS[seg.dataset.len] = Number(b.dataset.v);
-}));
+// length sliders (onboarding). News in seconds; podcasts/audiobooks in minutes,
+// with the top of the track meaning "Full" (0 = no condensing).
+const lenLabel = (type, v) => type === "news" ? `${v}s` : (v >= 16 ? "Full" : `${v} min`);
+const lenSeconds = (type, v) => type === "news" ? v : (v >= 16 ? 0 : v * 60);
+["news", "podcast", "audiobook"].forEach((type) => {
+  const input = $("len-" + type), val = $("len-" + type + "-val");
+  if (!input) return;
+  const update = () => { const v = Number(input.value); val.textContent = lenLabel(type, v); LENGTHS[type] = lenSeconds(type, v); };
+  input.addEventListener("input", update);
+  update(); // seed defaults
+});
 
 // ---------- onboarding ----------
 $("ob-start").onclick = async () => {

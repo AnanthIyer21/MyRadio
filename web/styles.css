@@ -55,8 +55,11 @@ h1 .ai { color: var(--accent); }
 .mic.rec { background: var(--bad); border-color: var(--bad); color: #fff; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .55; } }
 
-.lenrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.lenrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .lenrow label { font-size: 14px; color: var(--text); }
+.slider { display: flex; align-items: center; gap: 12px; }
+.slider input[type=range] { width: 160px; accent-color: var(--accent); cursor: pointer; }
+.slider span { font-size: 13px; color: var(--accent); font-weight: 600; min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Player */
 .context-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 6px; }

@@ -39,15 +39,15 @@
     </div>
 
     <div class="field">
-      <span>How long should things be?</span>
+      <span>How long should things be? <em>drag to set</em></span>
       <div class="lenrow"><label>📰 News</label>
-        <div class="seg" data-len="news"><button data-v="20">Quick · 20s</button><button data-v="45" class="on">Standard · 45s</button><button data-v="90">In-depth · 90s</button></div>
+        <div class="slider"><input id="len-news" type="range" min="15" max="120" step="5" value="45"><span id="len-news-val">45s</span></div>
       </div>
       <div class="lenrow"><label>🎙 Podcasts</label>
-        <div class="seg" data-len="podcast"><button data-v="120">2 min</button><button data-v="300" class="on">5 min</button><button data-v="0">Full</button></div>
+        <div class="slider"><input id="len-podcast" type="range" min="1" max="16" step="1" value="5"><span id="len-podcast-val">5 min</span></div>
       </div>
       <div class="lenrow"><label>📖 Audiobooks</label>
-        <div class="seg" data-len="audiobook"><button data-v="120" class="on">2 min</button><button data-v="300">5 min</button><button data-v="0">Full</button></div>
+        <div class="slider"><input id="len-audiobook" type="range" min="1" max="16" step="1" value="2"><span id="len-audiobook-val">2 min</span></div>
       </div>
     </div>
 
