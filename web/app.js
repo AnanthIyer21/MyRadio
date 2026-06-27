@@ -36,8 +36,11 @@ const summaryPrefs = { news: "summary", podcast: "full", audiobook: "summary" };
 const LENGTHS = { news: 45, podcast: 300, audiobook: 120 };
 
 // Spotify
-let spotifyCtx = null, spotifyMusic = [], lastSpPos = 0;
+let spotifyCtx = null, spotifyMusic = [], spotifyPodcasts = [], lastSpPos = 0;
 const spotifyReady = () => window.MyRadioSpotify && MyRadioSpotify.isConnected() && MyRadioSpotify.isPremium() && MyRadioSpotify.isReady();
+// Wearable context (Apple Watch). Browser can't read HealthKit, so the web demo
+// simulates it; a real watch feeds this via the native iOS app.
+let wearable = null;
 
 // timers
 let speakTimer = null, spPoll = null;
@@ -54,7 +57,7 @@ async function checkHealth() {
 }
 function signals() {
   const now = new Date(), day = now.getDay();
-  return { localHour: now.getHours(), dayOfWeek: day === 0 ? 7 : day, activity: activityFromContexts() };
+  return { localHour: now.getHours(), dayOfWeek: day === 0 ? 7 : day, activity: activityFromContexts(), wearable };
 }
 function activityFromContexts() {
   const c = profile.contexts || [];
@@ -134,6 +137,9 @@ const lenSeconds = (type, v) => type === "news" ? v : (v >= 16 ? 0 : v * 60);
   update(); // seed defaults
 });
 
+// Auto-save the interview continuously so nothing is lost across the Spotify redirect.
+els.onboarding.addEventListener("input", () => saveDraft());
+
 // ---------- onboarding ----------
 $("ob-start").onclick = async () => {
   const interests = $("ob-interests").value, music = $("ob-music").value, when = $("ob-when").value;
@@ -200,6 +206,14 @@ function initSettingsSliders() {
     val.textContent = lenLabel(type, Number(input.value));
   });
 }
+// Simulated Apple Watch — changing it re-plans so context (e.g. workout) adapts live.
+document.querySelectorAll(".settings .seg[data-wear]").forEach((seg) => seg.addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  seg.querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on");
+  const v = b.dataset.v;
+  wearable = v ? { motion: v, heartRate: v === "workout" ? 135 : v === "walking" ? 95 : 55 } : null;
+  applyPlan(await getPlan()); index = 0; history.length = 0; loadCurrent(true);
+}));
 
 // ---------- player ----------
 function startPlayer(plan) {
@@ -211,13 +225,21 @@ function applyPlan(plan) {
   els.mode.textContent = (plan.mode || "idle").replace(/_/g, " ");
   els.explanation.textContent = plan.explanation || "";
   queue = plan.queue || [];
-  // Premium: play music from the listener's Spotify instead of royalty-free.
+  // Premium: play music + podcasts from the listener's own Spotify.
   if (spotifyReady() && spotifyMusic.length) {
     let si = 0;
     queue = queue.map((it) => {
       if (it.type !== "music") return it;
       const t = spotifyMusic[si++ % spotifyMusic.length];
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
+    });
+  }
+  if (spotifyReady() && spotifyPodcasts.length) {
+    let pi = 0;
+    queue = queue.map((it) => {
+      if (it.type !== "podcast") return it;
+      const e = spotifyPodcasts[pi++ % spotifyPodcasts.length];
+      return { ...it, spotifyUri: e.uri, title: e.title, subtitle: `${e.show} · Spotify`, source: "Spotify" };
     });
   }
 }
@@ -239,10 +261,8 @@ function condense(text, seconds) {
 }
 
 async function resolveContent(item) {
-  if (item.type === "music") {
-    if (item.spotifyUri && spotifyReady()) return { kind: "spotify", uri: item.spotifyUri, isFull: true };
-    return { kind: "audio", audioUrl: item.audioUrl, isFull: false };
-  }
+  if (item.spotifyUri && spotifyReady()) return { kind: "spotify", uri: item.spotifyUri, isFull: true };
+  if (item.type === "music") return { kind: "audio", audioUrl: item.audioUrl, isFull: false };
   const pref = summaryPrefs[item.type] || "summary";
   if (item.type === "podcast") {
     if (pref === "full" && item.audioUrl) return { kind: "audio", audioUrl: item.audioUrl, isFull: true };
@@ -348,8 +368,10 @@ async function startSpotify(uri) {
   clearInterval(spPoll);
   spPoll = setInterval(async () => {
     const s = await MyRadioSpotify.getState(); if (!s) return;
-    els.npBar.style.width = (s.position / s.duration * 100) + "%";
-    els.npCur.textContent = fmt(s.position / 1000); els.npRem.textContent = "-" + fmt((s.duration - s.position) / 1000);
+    if (playCap && s.position / 1000 >= playCap && !capped) { capped = true; advance(); return; }
+    const eff = playCap ? Math.min(s.duration, playCap * 1000) : s.duration;
+    els.npBar.style.width = Math.min(100, s.position / eff * 100) + "%";
+    els.npCur.textContent = fmt(s.position / 1000); els.npRem.textContent = "-" + fmt(Math.max(0, (eff - s.position) / 1000));
     setToggle(!s.paused);
     if (s.paused && s.position === 0 && lastSpPos > 1500) { lastSpPos = 0; advance(); }
     else lastSpPos = s.position;
@@ -485,7 +507,7 @@ function localPlan() {
     if (MyRadioSpotify.isConnected()) {
       try {
         spotifyCtx = await MyRadioSpotify.loadContext();
-        if (spotifyCtx.premium) { await MyRadioSpotify.initPlayer(); spotifyMusic = spotifyCtx.topTracks || []; }
+        if (spotifyCtx.premium) { await MyRadioSpotify.initPlayer(); spotifyMusic = spotifyCtx.topTracks || []; spotifyPodcasts = spotifyCtx.topShows || []; }
         updateSpotifyUI();
       } catch {}
     }

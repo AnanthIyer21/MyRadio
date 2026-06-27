@@ -83,47 +83,65 @@
   async function loadContext() {
     const me = await api("/me");
     premium = me.product === "premium";
-    const [artists, tracks, lists] = await Promise.all([
-      api("/me/top/artists?limit=20").catch(() => ({ items: [] })),
-      api("/me/top/tracks?limit=20").catch(() => ({ items: [] })),
-      api("/me/playlists?limit=20").catch(() => ({ items: [] })),
-    ]);
-    const genres = [...new Set(artists.items.flatMap((a) => a.genres || []))].slice(0, 12);
+    const artists = (await api("/me/top/artists?limit=20").catch(() => ({ items: [] }))).items;
+    const lists = (await api("/me/playlists?limit=20").catch(() => ({ items: [] }))).items;
+    const genres = [...new Set(artists.flatMap((a) => a.genres || []))].slice(0, 12);
+    const [topTracks, topShows] = await Promise.all([getTracks(artists), getShows()]);
     return {
-      premium,
-      displayName: me.display_name,
-      genres,
-      topArtists: artists.items.map((a) => a.name),
-      playlists: lists.items.map((p) => p.name),
-      topTracks: tracks.items.map((t) => ({ uri: t.uri, title: t.name, artist: t.artists?.[0]?.name || "" })),
+      premium, displayName: me.display_name, genres,
+      topArtists: artists.map((a) => a.name), playlists: lists.map((p) => p.name),
+      topTracks, topShows,
     };
+  }
+
+  // Robust playable-track set — fresh accounts have no "top tracks", and some catalog
+  // endpoints are deprecated for new apps, so cascade: top -> saved -> artist top -> search.
+  async function getTracks(artists = []) {
+    let t = (await api("/me/top/tracks?limit=30").catch(() => ({ items: [] }))).items;
+    if (t.length < 5) t = t.concat((await api("/me/tracks?limit=30").catch(() => ({ items: [] }))).items.map((i) => i.track).filter(Boolean));
+    if (t.length < 5) for (const a of artists.slice(0, 3)) {
+      if (!a.id) continue;
+      t = t.concat(((await api(`/artists/${a.id}/top-tracks?market=from_token`).catch(() => ({ tracks: [] }))).tracks) || []);
+      if (t.length >= 10) break;
+    }
+    if (t.length < 5) t = t.concat(((await api("/search?type=track&limit=25&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
+    const seen = new Set();
+    return t.filter((x) => x && x.uri && !seen.has(x.uri) && seen.add(x.uri)).map((x) => ({ uri: x.uri, title: x.name, artist: x.artists?.[0]?.name || "" }));
+  }
+
+  // Latest episode from the listener's saved Spotify shows (podcasts).
+  async function getShows() {
+    const saved = (await api("/me/shows?limit=10").catch(() => ({ items: [] }))).items.map((i) => i.show).filter(Boolean);
+    const out = [];
+    for (const sh of saved.slice(0, 4)) {
+      try { const ep = (await api(`/shows/${sh.id}/episodes?limit=1&market=from_token`)).items?.[0]; if (ep) out.push({ uri: ep.uri, title: ep.name, show: sh.name }); } catch {}
+    }
+    return out;
   }
 
   // ---- Web Playback SDK (Premium full-track playback) ----
   function initPlayer() {
     return new Promise((resolve) => {
-      if (player) return resolve(true);
+      if (ready) return resolve(true);
       const boot = () => {
-        player = new window.Spotify.Player({
-          name: "MyRadio AI",
-          getOAuthToken: (cb) => token().then((t) => cb(t)),
-          volume: 0.8,
-        });
-        player.addListener("ready", ({ device_id }) => { deviceId = device_id; ready = true; });
+        player = new window.Spotify.Player({ name: "MyRadio AI", getOAuthToken: (cb) => token().then((t) => cb(t)), volume: 0.8 });
+        player.addListener("ready", ({ device_id }) => { deviceId = device_id; ready = true; resolve(true); });
+        player.addListener("not_ready", () => {});
         player.addListener("player_state_changed", (s) => { if (stateCb) stateCb(s); });
+        ["initialization_error", "authentication_error", "account_error"].forEach((ev) => player.addListener(ev, () => resolve(false)));
         player.connect();
-        resolve(true);
+        setTimeout(() => resolve(ready), 9000); // resolve anyway so boot never hangs
       };
       if (window.Spotify && window.Spotify.Player) return boot();
       window.onSpotifyWebPlaybackSDKReady = boot;
-      const s = document.createElement("script");
-      s.src = "https://sdk.scdn.co/spotify-player.js";
-      document.head.appendChild(s);
+      const s = document.createElement("script"); s.src = "https://sdk.scdn.co/spotify-player.js"; document.head.appendChild(s);
     });
   }
 
   async function play(uri) {
-    const at = await token(); if (!at || !deviceId) return false;
+    const at = await token(); if (!at) return false;
+    if (!deviceId) await new Promise((r) => { const t0 = Date.now(); const iv = setInterval(() => { if (deviceId || Date.now() - t0 > 6000) { clearInterval(iv); r(); } }, 200); });
+    if (!deviceId) return false;
     await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
       method: "PUT", headers: { authorization: "Bearer " + at, "content-type": "application/json" },
       body: JSON.stringify({ uris: [uri] }),
