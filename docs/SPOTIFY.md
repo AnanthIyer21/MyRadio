@@ -8,16 +8,22 @@ iTunes podcasts automatically.
 ## One-time setup (you)
 
 1. Go to the **Spotify Developer Dashboard**: https://developer.spotify.com/dashboard
-2. **Create app** → any name/description.
+2. **Create app** → any name/description. For "Which API/SDKs are you planning to use?"
+   tick **Web Playback SDK** (Web API access comes with every app — if its checkbox is
+   greyed/locked you can ignore it; it isn't required to get a Client ID).
 3. In the app's **Settings → Redirect URIs**, add **exactly**:
    ```
-   http://localhost:8080
+   http://127.0.0.1:8080
    ```
+   ⚠️ Spotify rejects `http://localhost` as "not secure" — you must use the loopback IP
+   `127.0.0.1`. HTTP is allowed for `127.0.0.1` specifically.
 4. Copy the **Client ID** and paste it into `web/config.js`:
    ```js
-   window.MYRADIO_CONFIG = { SPOTIFY_CLIENT_ID: "PASTE_HERE", SPOTIFY_REDIRECT_URI: "http://localhost:8080" };
+   window.MYRADIO_CONFIG = { SPOTIFY_CLIENT_ID: "PASTE_HERE", SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8080" };
    ```
    (No client secret — the browser uses the secure PKCE flow.)
+5. **Open the app at `http://127.0.0.1:8080`** (not `localhost`) so the page origin
+   matches the redirect URI.
 
 ## Using it
 
