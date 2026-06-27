@@ -36,11 +36,9 @@ const summaryPrefs = { news: "summary", podcast: "full", audiobook: "summary" };
 const LENGTHS = { news: 45, podcast: 300, audiobook: 120 };
 
 // Spotify
-let spotifyCtx = null, spotifyMusic = [], spotifyPodcasts = [], lastSpPos = 0;
+let spotifyCtx = null, spotifyMusic = [], spotifyPodcasts = [], lastSpPos = 0, lastSpDur = 0;
 const spotifyReady = () => window.MyRadioSpotify && MyRadioSpotify.isConnected() && MyRadioSpotify.isPremium() && MyRadioSpotify.isReady();
-// Wearable context (Apple Watch). Browser can't read HealthKit, so the web demo
-// simulates it; a real watch feeds this via the native iOS app.
-let wearable = null;
+const shuffled = (arr) => arr.map((v) => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
 
 // timers
 let speakTimer = null, spPoll = null;
@@ -57,7 +55,7 @@ async function checkHealth() {
 }
 function signals() {
   const now = new Date(), day = now.getDay();
-  return { localHour: now.getHours(), dayOfWeek: day === 0 ? 7 : day, activity: activityFromContexts(), wearable };
+  return { localHour: now.getHours(), dayOfWeek: day === 0 ? 7 : day, activity: activityFromContexts() };
 }
 function activityFromContexts() {
   const c = profile.contexts || [];
@@ -206,14 +204,6 @@ function initSettingsSliders() {
     val.textContent = lenLabel(type, Number(input.value));
   });
 }
-// Simulated Apple Watch — changing it re-plans so context (e.g. workout) adapts live.
-document.querySelectorAll(".settings .seg[data-wear]").forEach((seg) => seg.addEventListener("click", async (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  seg.querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on");
-  const v = b.dataset.v;
-  wearable = v ? { motion: v, heartRate: v === "workout" ? 135 : v === "walking" ? 95 : 55 } : null;
-  applyPlan(await getPlan()); index = 0; history.length = 0; loadCurrent(true);
-}));
 
 // ---------- player ----------
 function startPlayer(plan) {
@@ -227,18 +217,18 @@ function applyPlan(plan) {
   queue = plan.queue || [];
   // Premium: play music + podcasts from the listener's own Spotify.
   if (spotifyReady() && spotifyMusic.length) {
-    let si = 0;
+    const pool = shuffled(spotifyMusic); let si = 0;       // shuffle so it's not the same songs each time
     queue = queue.map((it) => {
       if (it.type !== "music") return it;
-      const t = spotifyMusic[si++ % spotifyMusic.length];
+      const t = pool[si++ % pool.length];
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
     });
   }
   if (spotifyReady() && spotifyPodcasts.length) {
-    let pi = 0;
+    const pool = shuffled(spotifyPodcasts); let pi = 0;
     queue = queue.map((it) => {
       if (it.type !== "podcast") return it;
-      const e = spotifyPodcasts[pi++ % spotifyPodcasts.length];
+      const e = pool[pi++ % pool.length];
       return { ...it, spotifyUri: e.uri, title: e.title, subtitle: `${e.show} · Spotify`, source: "Spotify" };
     });
   }
@@ -370,6 +360,7 @@ async function startSpotify(uri) {
     const s = await MyRadioSpotify.getState(); if (!s) return;
     if (playCap && s.position / 1000 >= playCap && !capped) { capped = true; advance(); return; }
     const eff = playCap ? Math.min(s.duration, playCap * 1000) : s.duration;
+    lastSpDur = eff;
     els.npBar.style.width = Math.min(100, s.position / eff * 100) + "%";
     els.npCur.textContent = fmt(s.position / 1000); els.npRem.textContent = "-" + fmt(Math.max(0, (eff - s.position) / 1000));
     setToggle(!s.paused);
@@ -404,7 +395,7 @@ els.npProgress.onclick = (e) => {
   const r = els.npProgress.getBoundingClientRect(), ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
   if (mode === "audio" && els.audio.duration) els.audio.currentTime = ratio * els.audio.duration;
   else if (mode === "speak") startSpeakFrom(speakText, Math.floor(ratio * speakText.length));
-  else if (mode === "spotify") MyRadioSpotify.seek(ratio * (lastSpPos || 0));
+  else if (mode === "spotify") MyRadioSpotify.seek(ratio * (lastSpDur || 0)); // seek by duration, not position
 };
 async function advance() {
   history.push(index); index += 1;

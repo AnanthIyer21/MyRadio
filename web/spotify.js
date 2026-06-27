@@ -81,8 +81,17 @@
 
   // ---- context hub: who is this listener on Spotify ----
   async function loadContext() {
-    const me = await api("/me");
-    premium = me.product === "premium";
+    let me = null;
+    try { me = await api("/me"); }
+    catch { await new Promise((r) => setTimeout(r, 700)); try { me = await api("/me"); } catch {} }
+    if (me) {
+      premium = me.product === "premium";
+      try { localStorage.setItem("sp_premium", premium ? "1" : "0"); localStorage.setItem("sp_name", me.display_name || ""); } catch {}
+    } else {
+      // Transient /me failure — keep the last known state instead of flipping to "free".
+      premium = localStorage.getItem("sp_premium") === "1";
+      me = { display_name: localStorage.getItem("sp_name") || "" };
+    }
     const artists = (await api("/me/top/artists?limit=20").catch(() => ({ items: [] }))).items;
     const lists = (await api("/me/playlists?limit=20").catch(() => ({ items: [] }))).items;
     const genres = [...new Set(artists.flatMap((a) => a.genres || []))].slice(0, 12);
@@ -156,12 +165,13 @@
   // Handle the redirect back from Spotify; returns true if a fresh login happened.
   async function handleRedirect() {
     const p = new URLSearchParams(location.search);
-    if (p.get("code")) {
-      try { await exchange(p.get("code")); } catch (e) { console.warn(e); }
-      history.replaceState({}, "", REDIRECT);
-      return true;
-    }
-    return false;
+    const code = p.get("code");
+    if (!code) return false;
+    history.replaceState({}, "", REDIRECT); // strip ?code immediately so a reload can't reuse it
+    // If we already hold a valid token (boot ran twice / reload), don't re-exchange a used code.
+    if (localStorage.getItem(LS.at) && Date.now() < Number(localStorage.getItem(LS.exp) || 0)) return true;
+    try { await exchange(code); return true; }
+    catch (e) { console.warn("Spotify token exchange failed:", e); return false; }
   }
 
   window.MyRadioSpotify = {
