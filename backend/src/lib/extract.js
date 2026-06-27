@@ -1,7 +1,7 @@
 // Pull readable body text out of an article page (paragraph text), and clean
 // Project Gutenberg plain-text. Used so "Full article / Full text" can be read aloud.
 
-export function extractArticle(html, maxChars = 7000) {
+export function extractArticle(html, maxChars = 14000) {
   let scope = html;
   const art = html.match(/<article[\s\S]*?<\/article>/i);
   if (art) scope = art[0];
@@ -13,7 +13,7 @@ export function extractArticle(html, maxChars = 7000) {
   return text;
 }
 
-export function cleanBookText(raw, maxChars = 9000) {
+export function cleanBookText(raw, maxChars = 24000) {
   let t = raw;
   const start = t.indexOf("*** START");
   if (start >= 0) t = t.slice(t.indexOf("\n", start) + 1);

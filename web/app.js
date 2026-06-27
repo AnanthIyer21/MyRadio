@@ -42,6 +42,8 @@ const spotifyReady = () => window.MyRadioSpotify && MyRadioSpotify.isConnected()
 // timers
 let speakTimer = null, spPoll = null;
 let speakText = "", speakPos = 0;
+// playback length cap: a non-"Full" length slider stops the item after N seconds.
+let playCap = 0, capped = false;
 
 // ---------- connectivity ----------
 async function checkHealth() {
@@ -150,14 +152,6 @@ $("ob-start").onclick = async () => {
 };
 
 function persist() { try { localStorage.setItem("myradio_profile", JSON.stringify({ profile, LENGTHS, summaryPrefs })); } catch {} }
-function restore() {
-  try {
-    const s = JSON.parse(localStorage.getItem("myradio_profile") || "null");
-    if (!s) return false;
-    profile = s.profile || {}; Object.assign(LENGTHS, s.LENGTHS || {}); Object.assign(summaryPrefs, s.summaryPrefs || {});
-    return !!profile.topics;
-  } catch { return false; }
-}
 
 async function onboard() {
   if (live) {
@@ -280,10 +274,12 @@ async function loadCurrent(autoplay = false) {
   if (my !== loadToken) return;                 // user already moved on
   current = d; mode = d.kind;
 
-  const seekable = d.kind === "audio" || d.kind === "spotify";
-  els.npProgress.classList.toggle("disabled", !(seekable || d.kind === "speak"));
-  const showSkip = d.isFull || d.kind === "spotify" || item.type === "music";
-  els.back10.hidden = els.fwd10.hidden = !showSkip;
+  // Length cap: any non-"Full" length means "stop this item after N seconds".
+  playCap = item.type !== "music" && LENGTHS[item.type] ? LENGTHS[item.type] : 0;
+  capped = false;
+
+  els.npProgress.classList.toggle("disabled", false);
+  els.back10.hidden = els.fwd10.hidden = false;  // ±10s available on everything
 
   if (d.kind === "text") { els.npNote.innerHTML = (item.summary || "") + (item.url ? ` <a href="${item.url}" target="_blank" rel="noopener">Open ↗</a>` : ""); setToggle(false); return; }
   els.npNote.textContent = noteFor(item, d);
@@ -316,8 +312,10 @@ function stopPlayback() {
 function playAudio() { els.audio.play().then(() => setToggle(true)).catch(() => setToggle(false)); }
 els.audio.ontimeupdate = () => {
   const dur = els.audio.duration; if (!dur) return;
-  els.npBar.style.width = (els.audio.currentTime / dur * 100) + "%";
-  els.npCur.textContent = fmt(els.audio.currentTime); els.npRem.textContent = "-" + fmt(dur - els.audio.currentTime);
+  if (playCap && els.audio.currentTime >= playCap && !capped) { capped = true; event("complete"); advance(); return; }
+  const eff = playCap ? Math.min(dur, playCap) : dur;
+  els.npBar.style.width = Math.min(100, els.audio.currentTime / eff * 100) + "%";
+  els.npCur.textContent = fmt(els.audio.currentTime); els.npRem.textContent = "-" + fmt(Math.max(0, eff - els.audio.currentTime));
 };
 els.audio.onended = () => { event("complete"); advance(); };
 
@@ -333,9 +331,12 @@ function startSpeakTimer() {
   stopSpeakTimer();
   speakTimer = setInterval(() => {
     speakPos = Math.min(speakText.length, speakPos + CPS * 0.25);
-    els.npBar.style.width = (speakPos / speakText.length * 100) + "%";
-    els.npCur.textContent = fmt(speakPos / CPS);
-    els.npRem.textContent = "-" + fmt(Math.max(0, (speakText.length - speakPos) / CPS));
+    const elapsed = speakPos / CPS;
+    if (playCap && elapsed >= playCap && !capped) { capped = true; stopSpeakTimer(); event("complete"); advance(); return; }
+    const total = playCap ? Math.min(speakText.length / CPS, playCap) : speakText.length / CPS;
+    els.npBar.style.width = Math.min(100, elapsed / total * 100) + "%";
+    els.npCur.textContent = fmt(elapsed);
+    els.npRem.textContent = "-" + fmt(Math.max(0, total - elapsed));
   }, 250);
 }
 function stopSpeakTimer() { clearInterval(speakTimer); speakTimer = null; }
@@ -489,6 +490,7 @@ function localPlan() {
       } catch {}
     }
   }
-  if (restore()) startPlayer(await onboard()); // returning user with a built station
-  else loadDraft();                            // first-timer (incl. after Spotify login) — refill the interview
+  // Always land on the onboarding interview (a reload should NOT skip to the player).
+  // Refill the form if we're returning from the Spotify login redirect.
+  loadDraft();
 })();
