@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MyRadio AI — demo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>MyRadio<span class="ai">AI</span></h1>
+      <span id="status" class="status">connecting…</span>
+    </header>
+
+    <section class="now">
+      <div class="context">
+        <div id="mode" class="mode">—</div>
+        <div id="explanation" class="explanation">Tap play to build your station.</div>
+      </div>
+
+      <div class="controls">
+        <label class="sim">
+          Simulate hour
+          <input id="hour" type="range" min="0" max="23" value="8" />
+          <span id="hourLabel">08:00</span>
+        </label>
+        <label class="sim">
+          Activity
+          <select id="activity">
+            <option value="">auto (by time)</option>
+            <option value="focus">focus</option>
+            <option value="workout">workout</option>
+            <option value="walking">walking</option>
+          </select>
+        </label>
+        <button id="play" class="play">▶ Play my station</button>
+      </div>
+    </section>
+
+    <section class="queue">
+      <h2>Up next</h2>
+      <ul id="queue"></ul>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
