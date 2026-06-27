@@ -42,12 +42,35 @@ h1 .ai { color: var(--accent); }
 }
 .primary:active { transform: translateY(1px); }
 
+/* interview free-text + dictation */
+.dictate { position: relative; }
+.dictate textarea {
+  width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 12px; padding: 13px 46px 13px 14px; font-size: 15px; font-family: inherit; resize: vertical; line-height: 1.4;
+}
+.dictate textarea:focus { outline: none; border-color: var(--accent); }
+.mic { position: absolute; right: 8px; top: 8px; width: 34px; height: 34px; border-radius: 9px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text); cursor: pointer; font-size: 15px; }
+.mic:hover { border-color: var(--accent); }
+.mic.rec { background: var(--bad); border-color: var(--bad); color: #fff; animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
+
+.lenrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.lenrow label { font-size: 14px; color: var(--text); }
+
 /* Player */
 .context-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 6px; }
 .mode { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); }
 .explanation { font-size: 15px; color: var(--text); margin-top: 3px; }
+.cb-actions { display: flex; gap: 8px; align-items: center; }
 .gear { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); width: 38px; height: 38px; border-radius: 10px; font-size: 18px; cursor: pointer; }
 .gear:hover { border-color: var(--accent); }
+.sp { background: #1DB954; border: 0; color: #062b13; font-weight: 700; font-size: 13px; padding: 9px 13px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+.sp:hover { filter: brightness(1.08); }
+.sp.connected { background: var(--panel-2); color: #1DB954; border: 1px solid #1DB95455; }
+
+.t.skip10 { font-size: 13px; font-weight: 600; border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; color: var(--muted); }
+.t.skip10:hover { color: var(--accent); border-color: var(--accent); }
 
 .field > span em { color: var(--accent); font-style: normal; font-size: 12px; margin-left: 6px; }
 

@@ -72,14 +72,22 @@ app runs in a local demo mode that still plays music.
 
 ## Status
 
-Working vertical slice: onboarding interview (topics, multi-select vibe + genres,
-contexts) → orchestrated, **live** cross-format station → audio player with
-seek, time-remaining, go-back / skip, and taste-learning feedback. News / podcast /
-audiobook items can play as a **spoken AI summary** or in **full** (⚙ Settings).
+Working vertical slice:
 
-See `docs/MVP_SPEC.md` for scope, `docs/ARCHITECTURE.md` for the agent design, and
-`docs/VOICE_AND_TTS.md` for the summary + text-to-speech options (and how to upgrade
-from the free browser voice to OpenAI TTS / ElevenLabs).
+- **Conversational onboarding** — free-text + voice dictation; tell it what you're into
+  in your own words, and choose how long news / podcasts / audiobooks should be.
+- **Live, relevance-ranked station** — multi-outlet news ranked to your stated interests,
+  real podcasts (iTunes), public-domain audiobooks (Gutendex), playable music.
+- **Player** — full audio for music/episodes; news/podcast/audiobook play as a **spoken,
+  length-matched AI summary** or in **full** (the full article / episode / book read aloud).
+  Seekable bar, time-remaining, **±10s skip** on long content, go-back/skip, a chime
+  between items, and taste-learning feedback.
+- **Spotify Connect (Premium)** — connect to play full tracks from your own library; your
+  top artists/genres feed ranking. Non-Premium falls back to royalty-free + iTunes.
+  Setup: `docs/SPOTIFY.md`.
+
+See `docs/MVP_SPEC.md` for scope, `docs/ARCHITECTURE.md` for the agent design,
+`docs/VOICE_AND_TTS.md` for summary + TTS options, and `docs/SPOTIFY.md` for Spotify.
 
 ## Product Constraints (carry these through every feature)
 

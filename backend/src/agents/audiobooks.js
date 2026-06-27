@@ -26,6 +26,7 @@ export async function audiobookAgent(profile = {}) {
       subtitle: `${b.authors?.[0]?.name || "Unknown"} · Project Gutenberg`,
       source: "Project Gutenberg",
       url: b.formats?.["text/html"] || b.formats?.["application/epub+zip"] || "",
+      textUrl: b.formats?.["text/plain; charset=us-ascii"] || b.formats?.["text/plain; charset=utf-8"] || b.formats?.["text/plain"] || "",
       summary: bookSummary(b),
       durationSec: 1500,
       energy: 0.3,

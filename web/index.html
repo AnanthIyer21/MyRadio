@@ -14,57 +14,48 @@
 
   <!-- ===== Onboarding interview (landing) ===== -->
   <main id="onboarding" class="screen onboarding">
-    <h2 class="lead">Let's tune your station.</h2>
-    <p class="sub">A few quick questions so MyRadio knows what to play.</p>
+    <h2 class="lead">Tell me what you're into.</h2>
+    <p class="sub">Talk to me like a person — type or hit the mic and just say it. The more specific, the better your station.</p>
 
     <label class="field">
-      <span>What should we call you?</span>
+      <span>First, what should I call you?</span>
       <input id="ob-name" type="text" placeholder="Your name" autocomplete="off" />
     </label>
 
     <div class="field">
-      <span>What do you want to hear about? <em>pick any</em></span>
-      <div id="ob-topics" class="chips" data-multi="true">
-        <button data-v="world">🌍 World</button>
-        <button data-v="technology">💻 Technology</button>
-        <button data-v="business">📈 Business</button>
-        <button data-v="science">🔬 Science</button>
-        <button data-v="sport">⚽ Sport</button>
-        <button data-v="culture">🎭 Culture</button>
-        <button data-v="politics">🏛 Politics</button>
+      <span>What do you actually want to hear about?</span>
+      <div class="dictate">
+        <textarea id="ob-interests" rows="3" placeholder="e.g. AI and startups, Arsenal FC, climate science, the war in Ukraine, anything about space…"></textarea>
+        <button class="mic" data-target="ob-interests" title="Dictate">🎙</button>
       </div>
     </div>
 
     <div class="field">
-      <span>Music vibe <em>pick any</em></span>
-      <div id="ob-vibe" class="chips" data-multi="true">
-        <button data-v="upbeat">⚡ Upbeat</button>
-        <button data-v="focus">🎧 Focus</button>
-        <button data-v="chill">🌙 Chill</button>
+      <span>What kind of music and shows do you love?</span>
+      <div class="dictate">
+        <textarea id="ob-music" rows="3" placeholder="e.g. upbeat electronic for the gym, lo-fi while I work, jazz in the evening, true-crime podcasts…"></textarea>
+        <button class="mic" data-target="ob-music" title="Dictate">🎙</button>
       </div>
     </div>
 
     <div class="field">
-      <span>Genres <em>pick any</em></span>
-      <div id="ob-genres" class="chips" data-multi="true">
-        <button data-v="electronic">🎛 Electronic</button>
-        <button data-v="pop">🎤 Pop</button>
-        <button data-v="rock">🎸 Rock</button>
-        <button data-v="classical">🎻 Classical</button>
-        <button data-v="jazz">🎷 Jazz</button>
-        <button data-v="lofi">📻 Lo-fi</button>
-        <button data-v="ambient">🌫 Ambient</button>
+      <span>How long should things be?</span>
+      <div class="lenrow"><label>📰 News</label>
+        <div class="seg" data-len="news"><button data-v="20">Quick · 20s</button><button data-v="45" class="on">Standard · 45s</button><button data-v="90">In-depth · 90s</button></div>
+      </div>
+      <div class="lenrow"><label>🎙 Podcasts</label>
+        <div class="seg" data-len="podcast"><button data-v="120">2 min</button><button data-v="300" class="on">5 min</button><button data-v="0">Full</button></div>
+      </div>
+      <div class="lenrow"><label>📖 Audiobooks</label>
+        <div class="seg" data-len="audiobook"><button data-v="120" class="on">2 min</button><button data-v="300">5 min</button><button data-v="0">Full</button></div>
       </div>
     </div>
 
     <div class="field">
-      <span>When do you usually listen? <em>pick any</em></span>
-      <div id="ob-contexts" class="chips" data-multi="true">
-        <button data-v="commute">🚆 Commute</button>
-        <button data-v="workout">🏋️ Workout</button>
-        <button data-v="focus">📚 Focus / work</button>
-        <button data-v="walking">🚶 Walking</button>
-        <button data-v="evening">🛋 Evening</button>
+      <span>When and where do you usually listen? <em>optional</em></span>
+      <div class="dictate">
+        <textarea id="ob-when" rows="2" placeholder="e.g. morning commute on the train, gym at 6pm, winding down before bed…"></textarea>
+        <button class="mic" data-target="ob-when" title="Dictate">🎙</button>
       </div>
     </div>
 
@@ -78,10 +69,12 @@
         <div id="mode" class="mode">—</div>
         <div id="explanation" class="explanation"></div>
       </div>
-      <button id="gear" class="gear" title="Listening settings">⚙</button>
+      <div class="cb-actions">
+        <button id="spotify" class="sp" title="Connect Spotify">Connect Spotify</button>
+        <button id="gear" class="gear" title="Listening settings">⚙</button>
+      </div>
     </div>
 
-    <!-- Per-type: AI summary vs full -->
     <section id="settings" class="settings" hidden>
       <h3>How should each type play?</h3>
       <div class="setrow"><span>📰 News</span>
@@ -93,7 +86,7 @@
       <div class="setrow"><span>📖 Audiobooks</span>
         <div class="seg" data-type="audiobook"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full text</button></div>
       </div>
-      <p class="hint">🎵 Music always plays in full. Summaries are spoken by your browser's voice — see the README for premium voice (ElevenLabs / OpenAI) setup.</p>
+      <p class="hint" id="sp-status">🎵 Music always plays in full. Summaries are spoken by your browser — connect Spotify Premium for full-track music & your playlists. See docs/VOICE_AND_TTS.md for premium voices.</p>
     </section>
 
     <section class="nowcard">
@@ -106,8 +99,10 @@
       <div class="times"><span id="np-cur">0:00</span><span id="np-rem"></span></div>
 
       <div class="transport">
-        <button id="prev" class="t" title="Go back">⏮</button>
+        <button id="prev" class="t" title="Previous">⏮</button>
+        <button id="back10" class="t skip10" title="Back 10s" hidden>−10</button>
         <button id="toggle" class="t big" title="Play / pause">▶</button>
+        <button id="fwd10" class="t skip10" title="Forward 10s" hidden>+10</button>
         <button id="next" class="t" title="Skip">⏭</button>
       </div>
       <div class="reactions">
@@ -125,6 +120,8 @@
     <audio id="audio"></audio>
   </main>
 
+  <script src="config.js"></script>
+  <script src="spotify.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

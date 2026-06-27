@@ -4,6 +4,8 @@
 import { createServer } from "node:http";
 import { detectContext } from "./context.js";
 import { orchestrate } from "./agents/orchestrator.js";
+import { getText } from "./lib/http.js";
+import { extractArticle, cleanBookText } from "./lib/extract.js";
 
 const PORT = process.env.PORT || 8787;
 
@@ -50,9 +52,12 @@ const server = createServer(async (req, res) => {
       Object.assign(profile, {
         name: body.name || profile.name,
         topics: body.topics || profile.topics || [],
+        keywords: body.keywords || profile.keywords || [],
         musicVibes: body.musicVibes || profile.musicVibes || [],
         genres: body.genres || profile.genres || [],
         contexts: body.contexts || profile.contexts || [],
+        lengths: body.lengths || profile.lengths,
+        spotify: body.spotify || profile.spotify, // top artists/genres context, when connected
         contentMix: body.contentMix || profile.contentMix,
       });
       const context = detectContext(body.signals || {});
@@ -74,6 +79,26 @@ const server = createServer(async (req, res) => {
       const profile = getProfile(userId);
       profile.rewards[itemId] = (profile.rewards[itemId] || 0) + (REWARD[type] || 0);
       return send(res, 200, { ok: true, itemId, reward: profile.rewards[itemId] });
+    }
+
+    // Full readable text of a news article (for read-aloud / condensing).
+    if (req.method === "GET" && url.pathname === "/api/article") {
+      const target = url.searchParams.get("url");
+      if (!/^https?:\/\//.test(target || "")) return send(res, 400, { error: "valid url required" });
+      try {
+        const text = extractArticle(await getText(target, 9000));
+        return send(res, 200, { text });
+      } catch (e) { return send(res, 200, { text: "", error: String(e?.message || e) }); }
+    }
+
+    // Public-domain book plain text (Project Gutenberg).
+    if (req.method === "GET" && url.pathname === "/api/booktext") {
+      const target = url.searchParams.get("url");
+      if (!/^https?:\/\//.test(target || "")) return send(res, 400, { error: "valid url required" });
+      try {
+        const text = cleanBookText(await getText(target, 9000));
+        return send(res, 200, { text });
+      } catch (e) { return send(res, 200, { text: "", error: String(e?.message || e) }); }
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/api/profile/")) {

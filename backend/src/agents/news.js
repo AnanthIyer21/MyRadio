@@ -38,11 +38,21 @@ export async function newsAgent(profile = {}) {
   const audioFeed = AUDIO_NEWS.find((a) => topics.includes(a.topic)) || AUDIO_NEWS[0];
 
   const tasks = [
-    ...chosen.map((f) => fetchFeed(f, 3)),
+    ...chosen.map((f) => fetchFeed(f, 4)),
     fetchFeed(audioFeed, 1),
   ];
   const settled = await Promise.allSettled(tasks);
-  const items = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  let items = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+
+  // Rank by relevance to the listener's stated interests (free-text keywords).
+  const keywords = (profile.keywords || []).map((k) => String(k).toLowerCase()).filter((k) => k.length > 2);
+  if (keywords.length) {
+    const score = (it) => {
+      const hay = `${it.title} ${it.summary || ""}`.toLowerCase();
+      return keywords.reduce((n, k) => n + (hay.includes(k) ? 1 : 0), 0);
+    };
+    items = items.map((it) => ({ ...it, _rel: score(it) })).sort((a, b) => b._rel - a._rel).map(({ _rel, ...it }) => it);
+  }
   return items.length ? items : seed();
 }
 
