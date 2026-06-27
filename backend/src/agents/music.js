@@ -1,13 +1,16 @@
-// Music agent — royalty-free, directly playable tracks tagged by energy/vibe so
-// they can match the listening context. Swap this catalogue for a licensed library
-// (or the Spotify SDK for Premium users) later; the interface stays the same.
+// Music agent — royalty-free, directly playable tracks tagged by vibe + genre + energy
+// so they can match both the listener's taste (multi-select vibes/genres) and the
+// current context. Swap this catalogue for a licensed library (or Spotify SDK) later.
 const CATALOGUE = [
-  { n: 1, title: "Neon Drive", vibe: "upbeat", energy: 0.85 },
-  { n: 9, title: "Afterglow", vibe: "upbeat", energy: 0.75 },
-  { n: 3, title: "Pulse Theory", vibe: "focus", energy: 0.6 },
-  { n: 5, title: "Deep Current", vibe: "focus", energy: 0.5 },
-  { n: 2, title: "Glass Horizon", vibe: "chill", energy: 0.35 },
-  { n: 8, title: "Velvet Hours", vibe: "chill", energy: 0.25 },
+  { n: 1, title: "Neon Drive", vibe: "upbeat", genre: "electronic", energy: 0.85 },
+  { n: 9, title: "Afterglow", vibe: "upbeat", genre: "pop", energy: 0.75 },
+  { n: 4, title: "Skyline Run", vibe: "upbeat", genre: "rock", energy: 0.8 },
+  { n: 3, title: "Pulse Theory", vibe: "focus", genre: "electronic", energy: 0.6 },
+  { n: 7, title: "Inner Orbit", vibe: "focus", genre: "classical", energy: 0.45 },
+  { n: 5, title: "Deep Current", vibe: "focus", genre: "ambient", energy: 0.5 },
+  { n: 2, title: "Glass Horizon", vibe: "chill", genre: "ambient", energy: 0.35 },
+  { n: 6, title: "Slow Tide", vibe: "chill", genre: "lofi", energy: 0.3 },
+  { n: 8, title: "Velvet Hours", vibe: "chill", genre: "jazz", energy: 0.25 },
 ].map((t) => ({
   ...t,
   id: `mus-sh${t.n}`,
@@ -24,16 +27,18 @@ const MODE_ENERGY = {
 
 export async function musicAgent(profile = {}, context = {}) {
   const target = MODE_ENERGY[context.mode] ?? 0.5;
-  const vibe = profile.musicVibe;
+  const vibes = (profile.musicVibes || []).map(String);
+  const genres = (profile.genres || []).map(String);
+
   return CATALOGUE
     .map((t) => ({
       id: t.id, type: t.type, title: t.title,
-      subtitle: `${cap(t.vibe)} · royalty-free`,
+      subtitle: `${cap(t.genre)} · ${t.vibe}`,
       source: t.source, durationSec: t.durationSec, energy: t.energy, audioUrl: t.audioUrl,
-      _fit: -Math.abs(t.energy - target) + (vibe && vibe === t.vibe ? 0.2 : 0),
+      _fit: -Math.abs(t.energy - target) + (vibes.includes(t.vibe) ? 0.2 : 0) + (genres.includes(t.genre) ? 0.25 : 0),
     }))
     .sort((a, b) => b._fit - a._fit)
-    .slice(0, 4)
+    .slice(0, 5)
     .map(({ _fit, ...t }) => t);
 }
 

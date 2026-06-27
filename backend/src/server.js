@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8787;
 const profiles = new Map();
 
 function getProfile(userId = "demo") {
-  if (!profiles.has(userId)) profiles.set(userId, { rewards: {}, contentMix: { music: 40, news: 25, podcast: 20, audiobook: 15 } });
+  if (!profiles.has(userId)) profiles.set(userId, { rewards: {}, topics: [], musicVibes: [], genres: [], contexts: [], contentMix: { music: 40, news: 25, podcast: 20, audiobook: 15 } });
   return profiles.get(userId);
 }
 
@@ -50,7 +50,8 @@ const server = createServer(async (req, res) => {
       Object.assign(profile, {
         name: body.name || profile.name,
         topics: body.topics || profile.topics || [],
-        musicVibe: body.musicVibe || profile.musicVibe,
+        musicVibes: body.musicVibes || profile.musicVibes || [],
+        genres: body.genres || profile.genres || [],
         contexts: body.contexts || profile.contexts || [],
         contentMix: body.contentMix || profile.contentMix,
       });

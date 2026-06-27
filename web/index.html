@@ -23,7 +23,7 @@
     </label>
 
     <div class="field">
-      <span>What do you want to hear about?</span>
+      <span>What do you want to hear about? <em>pick any</em></span>
       <div id="ob-topics" class="chips" data-multi="true">
         <button data-v="world">🌍 World</button>
         <button data-v="technology">💻 Technology</button>
@@ -36,8 +36,8 @@
     </div>
 
     <div class="field">
-      <span>What's your music vibe?</span>
-      <div id="ob-vibe" class="chips" data-multi="false">
+      <span>Music vibe <em>pick any</em></span>
+      <div id="ob-vibe" class="chips" data-multi="true">
         <button data-v="upbeat">⚡ Upbeat</button>
         <button data-v="focus">🎧 Focus</button>
         <button data-v="chill">🌙 Chill</button>
@@ -45,7 +45,20 @@
     </div>
 
     <div class="field">
-      <span>When do you usually listen?</span>
+      <span>Genres <em>pick any</em></span>
+      <div id="ob-genres" class="chips" data-multi="true">
+        <button data-v="electronic">🎛 Electronic</button>
+        <button data-v="pop">🎤 Pop</button>
+        <button data-v="rock">🎸 Rock</button>
+        <button data-v="classical">🎻 Classical</button>
+        <button data-v="jazz">🎷 Jazz</button>
+        <button data-v="lofi">📻 Lo-fi</button>
+        <button data-v="ambient">🌫 Ambient</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span>When do you usually listen? <em>pick any</em></span>
       <div id="ob-contexts" class="chips" data-multi="true">
         <button data-v="commute">🚆 Commute</button>
         <button data-v="workout">🏋️ Workout</button>
@@ -65,12 +78,23 @@
         <div id="mode" class="mode">—</div>
         <div id="explanation" class="explanation"></div>
       </div>
-      <label class="sim">
-        hour
-        <input id="hour" type="range" min="0" max="23" value="8" />
-        <span id="hourLabel">08</span>
-      </label>
+      <button id="gear" class="gear" title="Listening settings">⚙</button>
     </div>
+
+    <!-- Per-type: AI summary vs full -->
+    <section id="settings" class="settings" hidden>
+      <h3>How should each type play?</h3>
+      <div class="setrow"><span>📰 News</span>
+        <div class="seg" data-type="news"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full article</button></div>
+      </div>
+      <div class="setrow"><span>🎙 Podcasts</span>
+        <div class="seg" data-type="podcast"><button data-v="summary">AI summary</button><button data-v="full" class="on">Full episode</button></div>
+      </div>
+      <div class="setrow"><span>📖 Audiobooks</span>
+        <div class="seg" data-type="audiobook"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full text</button></div>
+      </div>
+      <p class="hint">🎵 Music always plays in full. Summaries are spoken by your browser's voice — see the README for premium voice (ElevenLabs / OpenAI) setup.</p>
+    </section>
 
     <section class="nowcard">
       <div id="np-badge" class="badge">—</div>
@@ -78,7 +102,8 @@
       <div id="np-sub" class="np-sub"></div>
       <div id="np-note" class="np-note"></div>
 
-      <div class="progress"><div id="np-bar" class="bar"></div></div>
+      <div id="np-progress" class="progress" title="Tap to seek"><div id="np-bar" class="bar"></div></div>
+      <div class="times"><span id="np-cur">0:00</span><span id="np-rem"></span></div>
 
       <div class="transport">
         <button id="prev" class="t" title="Go back">⏮</button>
@@ -86,9 +111,9 @@
         <button id="next" class="t" title="Skip">⏭</button>
       </div>
       <div class="reactions">
-        <button id="like" class="r" title="Like">♥ Like</button>
+        <button id="like" class="r like" title="Like">♥ Like</button>
         <button id="save" class="r" title="Save">⤓ Save</button>
-        <button id="dislike" class="r" title="Less like this">✕ Less</button>
+        <button id="dislike" class="r dislike" title="Less like this">✕ Less</button>
       </div>
     </section>
 

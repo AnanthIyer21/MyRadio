@@ -72,9 +72,14 @@ app runs in a local demo mode that still plays music.
 
 ## Status
 
-Working vertical slice: onboarding interview → orchestrated, **live** cross-format
-station → audio player with go-back / skip and taste-learning feedback.
-See `docs/MVP_SPEC.md` for scope and `docs/ARCHITECTURE.md` for the agent design.
+Working vertical slice: onboarding interview (topics, multi-select vibe + genres,
+contexts) → orchestrated, **live** cross-format station → audio player with
+seek, time-remaining, go-back / skip, and taste-learning feedback. News / podcast /
+audiobook items can play as a **spoken AI summary** or in **full** (⚙ Settings).
+
+See `docs/MVP_SPEC.md` for scope, `docs/ARCHITECTURE.md` for the agent design, and
+`docs/VOICE_AND_TTS.md` for the summary + text-to-speech options (and how to upgrade
+from the free browser voice to OpenAI TTS / ElevenLabs).
 
 ## Product Constraints (carry these through every feature)
 

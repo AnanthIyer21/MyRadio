@@ -4,16 +4,27 @@ export function parseRss(xml, limit = 10) {
   const items = [];
   const blocks = xml.split(/<item[\s>]/i).slice(1, limit + 1);
   for (const b of blocks) {
-    const enclosure = b.match(/<enclosure[^>]*url="([^"]+)"/i);
     items.push({
       title: tag(b, "title"),
       link: tag(b, "link"),
       pubDate: tag(b, "pubDate"),
-      description: tag(b, "description"),
-      audioUrl: enclosure ? enclosure[1] : null,
+      description: tag(b, "description") || tag(b, "itunes:summary"),
+      duration: tag(b, "itunes:duration"),
+      audioUrl: audioEnclosure(b),
     });
   }
   return items;
+}
+
+// Only treat an <enclosure> as playable audio if its type is audio/* (news feeds
+// often attach images, which must NOT become an audio URL).
+function audioEnclosure(block) {
+  const enc = block.match(/<enclosure[^>]*>/i);
+  if (!enc) return null;
+  const url = enc[0].match(/url="([^"]+)"/i);
+  const type = enc[0].match(/type="([^"]+)"/i);
+  if (url && (!type || /audio/i.test(type[1]))) return url[1];
+  return null;
 }
 
 function tag(block, name) {
