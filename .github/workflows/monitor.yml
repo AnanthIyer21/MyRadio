@@ -53,3 +53,38 @@ jobs:
       - name: Notify Slack on failure
         if: failure()
         run: node monitor/notify-slack.mjs "$SLACK_WEBHOOK_URL"
+
+  # Advisory UX findings — never blocks the build; refreshes the handoff for the
+  # dev session and Slacks high/med findings.
+  ux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run UX probe
+        run: PROBE_TIME="$(date -u +%Y-%m-%dT%H:%MZ)" node monitor/ux-probe.mjs --json | tee ux-findings.json
+      - name: Upload handoff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-handoff
+          path: |
+            monitor/HANDOFF.md
+            ux-findings.json
+      - name: Slack UX findings
+        if: always()
+        run: |
+          node -e '
+            const r = require("./ux-findings.json");
+            const hi = r.findings.filter(f => f.severity !== "low");
+            if (!process.env.SLACK_WEBHOOK_URL || !hi.length) process.exit(0);
+            const lines = hi.map(f => `• [${f.severity.toUpperCase()}] ${f.area}: ${f.symptom}`).join("\n");
+            fetch(process.env.SLACK_WEBHOOK_URL, { method:"POST", headers:{"content-type":"application/json"},
+              body: JSON.stringify({ text: `🟡 *MyRadio UX findings* (${process.env.GITHUB_SHA?.slice(0,7)})\n${lines}\nFull handoff in the run artifacts / monitor/HANDOFF.md` })
+            }).then(()=>console.log("posted")).catch(e=>console.log("slack skip",e.message));
+          '

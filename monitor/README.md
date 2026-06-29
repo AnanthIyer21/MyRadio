@@ -39,6 +39,26 @@ created via the `/schedule` skill.
 
 Runs every 30 min while a Claude Code session is open.
 
+## UX probe (find real "using the site" bugs)
+
+`ux-probe.mjs` drives the API the way the web client does and flags issues a *user*
+would hit — garbled text read aloud, Gutenberg license spoken as an audiobook,
+placeholder/seed content in a live station, malformed media URLs, missing fields.
+
+```bash
+node monitor/ux-probe.mjs          # prints findings + rewrites monitor/HANDOFF.md
+node monitor/ux-probe.mjs --json
+```
+
+It writes [`monitor/HANDOFF.md`](./HANDOFF.md) — the handoff the dev session reads for
+prioritized recommendations. The file is git-ignored (regenerated locally).
+
+### After every commit
+`bash monitor/install-hooks.sh` installs a `post-commit` hook that re-runs the probe in
+the background and refreshes `HANDOFF.md` after each commit by either session. In CI the
+`ux` job does the same on every push and Slacks any high/med findings (advisory — it
+never blocks the build).
+
 ## Checks
 
 See [`CHECKS.md`](./CHECKS.md) for the live registry and the backlog of checks to add.

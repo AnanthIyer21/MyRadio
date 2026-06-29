@@ -16,3 +16,6 @@ ios/**/*.xcodeproj/
 ios/**/DerivedData/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
+
+# Monitor UX probe handoff (regenerated locally after each commit)
+monitor/HANDOFF.md
