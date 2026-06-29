@@ -48,7 +48,8 @@ jobs:
           name: monitor-report
           path: monitor-report.json
 
-      # Slack alert on failure. Dormant until the SLACK_WEBHOOK_URL secret exists.
+      # Slack alert on failure. The script no-ops if SLACK_WEBHOOK_URL is empty,
+      # so this is safe to always run (secret-derived env isn't reliable in `if`).
       - name: Notify Slack on failure
-        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        if: failure()
         run: node monitor/notify-slack.mjs "$SLACK_WEBHOOK_URL"
