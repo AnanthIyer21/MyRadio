@@ -1,4 +1,5 @@
 // Minimal dependency-free RSS parser — good enough for well-formed feeds.
+import { decodeEntities } from "./entities.js";
 
 export function parseRss(xml, limit = 10) {
   const items = [];
@@ -23,7 +24,8 @@ function audioEnclosure(block) {
   if (!enc) return null;
   const url = enc[0].match(/url="([^"]+)"/i);
   const type = enc[0].match(/type="([^"]+)"/i);
-  if (url && (!type || /audio/i.test(type[1]))) return url[1];
+  // Decode XML entities so the URL's query params survive (&amp; -> &).
+  if (url && (!type || /audio/i.test(type[1]))) return decodeEntities(url[1]);
   return null;
 }
 
@@ -33,14 +35,11 @@ function tag(block, name) {
 }
 
 function clean(s) {
-  return s
-    .replace(/<!\[CDATA\[|\]\]>/g, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&#\d+;/g, "")
-    .replace(/&[a-z]+;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return decodeEntities(
+    String(s)
+      .replace(/<!\[CDATA\[|\]\]>/g, "")
+      .replace(/<[^>]+>/g, "")
+  ).replace(/\s+/g, " ").trim();
 }
 
 // Stable short id from a string (no crypto dependency).

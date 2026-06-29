@@ -26,14 +26,37 @@ export async function audiobookAgent(profile = {}) {
       subtitle: `${b.authors?.[0]?.name || "Unknown"} · Project Gutenberg`,
       source: "Project Gutenberg",
       url: b.formats?.["text/html"] || b.formats?.["application/epub+zip"] || "",
-      textUrl: b.formats?.["text/plain; charset=us-ascii"] || b.formats?.["text/plain; charset=utf-8"] || b.formats?.["text/plain"] || "",
+      textUrl: pickBookText(b.formats),
       summary: bookSummary(b),
       durationSec: 1500,
       energy: 0.3,
       audioUrl: null,
-    }));
+    }))
+    // Drop books with no usable plain-text source rather than ship a dead/README slot.
+    .filter((it) => it.textUrl);
 
   return items.length ? items : seed();
+}
+
+// Choose the actual book plain-text, never a README / file-listing / zip.
+// Gutendex sometimes lists a "*-README.txt" under a text/plain key, which would
+// otherwise be read aloud as a file-distribution notice instead of the book.
+function pickBookText(formats = {}) {
+  const urls = Object.entries(formats)
+    .filter(([k]) => /^text\/plain/i.test(k))
+    .map(([, v]) => v)
+    .filter(Boolean);
+  const pool = urls.filter((u) => !/readme|\.zip(\?|$)|index|metadata|\/dirs?\//i.test(u));
+  // Prefer the /files/NN/NN-0.txt edition (carries the standard *** START *** markers)
+  // over the /ebooks/NN.txt.utf-8 cache edition (marker-less front matter).
+  return (
+    pool.find((u) => /-0\.txt(\?|$)/i.test(u)) ||
+    pool.find((u) => /\/files\/\d+\/\d+\.txt(\?|$)/i.test(u)) ||
+    pool.find((u) => /\.txt\.utf-8(\?|$)/i.test(u)) ||
+    pool.find((u) => /\.txt(\?|$)/i.test(u)) ||
+    pool[0] ||
+    ""
+  );
 }
 
 function bookSummary(b) {
@@ -42,6 +65,29 @@ function bookSummary(b) {
   return toSummary(`${b.title} by ${author}.${subjects ? " Themes: " + subjects + "." : ""}`);
 }
 
+// Resilient fallback: real public-domain classics with known-good plain-text URLs
+// (proper *** START *** markers, handled by cleanBookText), so a transient Gutendex
+// failure still yields a genuine readable book — never fake "offline demo" content.
+const CLASSICS = [
+  { id: 1342, title: "Pride and Prejudice", author: "Jane Austen", subjects: ["England", "love", "social class"] },
+  { id: 1661, title: "The Adventures of Sherlock Holmes", author: "Arthur Conan Doyle", subjects: ["detective", "mystery"] },
+  { id: 84, title: "Frankenstein", author: "Mary Wollstonecraft Shelley", subjects: ["science", "horror"] },
+  { id: 11, title: "Alice's Adventures in Wonderland", author: "Lewis Carroll", subjects: ["fantasy", "children"] },
+  { id: 2701, title: "Moby Dick", author: "Herman Melville", subjects: ["adventure", "sea"] },
+];
+
 function seed() {
-  return [{ id: "book-seed", type: "audiobook", title: "Public-domain classic, ch.1", subtitle: "Seed · offline", source: "seed", summary: "Offline demo book.", durationSec: 900, energy: 0.3, audioUrl: null }];
+  return CLASSICS.slice(0, 3).map((b) => ({
+    id: "book-" + b.id,
+    type: "audiobook",
+    title: b.title,
+    subtitle: `${b.author} · Project Gutenberg`,
+    source: "Project Gutenberg",
+    url: `https://www.gutenberg.org/ebooks/${b.id}`,
+    textUrl: `https://www.gutenberg.org/files/${b.id}/${b.id}-0.txt`,
+    summary: toSummary(`${b.title} by ${b.author}. Themes: ${b.subjects.join("; ")}.`),
+    durationSec: 1500,
+    energy: 0.3,
+    audioUrl: null,
+  }));
 }

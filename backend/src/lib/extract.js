@@ -1,5 +1,6 @@
 // Pull readable body text out of an article page (paragraph text), and clean
 // Project Gutenberg plain-text. Used so "Full article / Full text" can be read aloud.
+import { decodeEntities } from "./entities.js";
 
 export function extractArticle(html, maxChars = 14000) {
   let scope = html;
@@ -14,22 +15,28 @@ export function extractArticle(html, maxChars = 14000) {
 }
 
 export function cleanBookText(raw, maxChars = 24000) {
-  let t = raw;
-  const start = t.indexOf("*** START");
-  if (start >= 0) t = t.slice(t.indexOf("\n", start) + 1);
-  const end = t.indexOf("*** END");
-  if (end >= 0) t = t.slice(0, end);
-  t = t.replace(/\s+/g, " ").trim();
+  let t = String(raw).replace(/\r\n/g, "\n");
+  // 1) Cut the footer first (license/credits tail) so it can't leak into the body.
+  //    The END marker may wrap lines and use 0+ spaces after ***.
+  const em = t.search(/\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG|END OF (?:THE|THIS) PROJECT GUTENBERG|START: FULL LICENSE/i);
+  if (em >= 0) t = t.slice(0, em);
+  // 2) Drop leading Gutenberg boilerplate by PARAGRAPH (blank-line delimited), which
+  //    survives the multi-line wrapping that breaks line-by-line matching. Handles
+  //    both the legal preamble + metadata header AND the post-START transcriber notes
+  //    ("E-text prepared by … Project Gutenberg … Online Distributed Proofreading").
+  const BOILER = /^(title|author|editor|translator|illustrator|release date|posting date|first posted|last updated|language|character set|credits?|produced by|e-?text prepared)\b|project gutenberg|proofreading|pgdp\.net|gutenberg\.org|this ebook is for the use|\d+-h\.(htm|zip)/i;
+  const paras = t.split(/\n\s*\n/);
+  let j = 0;
+  while (j < paras.length && (BOILER.test(paras[j].trim()) || paras[j].trim().length < 2)) j++;
+  if (j < paras.length) t = paras.slice(j).join("\n\n");
+  t = decodeEntities(t).replace(/\s+/g, " ").trim();
   return t.slice(0, maxChars);
 }
 
 function clean(s) {
-  return s
-    .replace(/<!\[CDATA\[|\]\]>/g, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&#\d+;/g, "")
-    .replace(/&[a-z]+;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return decodeEntities(
+    String(s)
+      .replace(/<!\[CDATA\[|\]\]>/g, "")
+      .replace(/<[^>]+>/g, " ")
+  ).replace(/\s+/g, " ").trim();
 }
