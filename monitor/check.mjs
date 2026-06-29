@@ -165,6 +165,12 @@ if (process.env.MYRADIO_HEALTH_URL) {
 
 if (server && server.exitCode == null) { server.kill("SIGTERM"); await sleep(200); }
 
+// Self-test hook: force one critical failure so the alerting path can be
+// validated end-to-end without breaking anything real. Off unless explicitly set.
+if (process.env.MONITOR_SELFTEST_FAIL === "1") {
+  results.push({ name: "SELF-TEST forced failure", severity: "critical", ok: false, detail: "intentional failure to test alerting", ms: 0 });
+}
+
 const failed = results.filter((r) => !r.ok);
 const criticalFailed = failed.filter((r) => r.severity === "critical");
 const status = criticalFailed.length ? "BROKEN" : failed.length ? "DEGRADED" : "HEALTHY";
