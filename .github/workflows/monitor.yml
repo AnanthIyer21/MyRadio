@@ -17,6 +17,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Job-level env so it's visible in step `if:` conditions (step-level env is not).
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,11 +28,11 @@ jobs:
           node-version: "22"
 
       - name: Run MyRadio monitor
-        id: monitor
         run: |
           set -o pipefail
-          node monitor/check.mjs --json | tee monitor-report.json
-          node monitor/check.mjs # human-readable to the log; sets the job pass/fail
+          # Save the JSON report even on failure, then gate the job on it.
+          node monitor/check.mjs --json | tee monitor-report.json || true
+          node -e "const s=require('./monitor-report.json').status; console.log('overall:', s); process.exit(s === 'BROKEN' ? 1 : 0)"
 
       - name: Upload report
         if: always()
@@ -38,14 +41,7 @@ jobs:
           name: monitor-report
           path: monitor-report.json
 
-      # Optional Slack DM/channel alert on failure.
-      # Add a repo secret SLACK_WEBHOOK_URL (Slack Incoming Webhook) to enable.
+      # Slack alert on failure. Dormant until the SLACK_WEBHOOK_URL secret exists.
       - name: Notify Slack on failure
         if: failure() && env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          SUMMARY=$(node -e "const r=require('./monitor-report.json');console.log(r.results.filter(x=>!x.ok).map(x=>'• '+x.name+': '+x.detail).join('\n')||'see logs')" 2>/dev/null || echo "see workflow logs")
-          curl -sf -X POST -H 'content-type: application/json' "$SLACK_WEBHOOK_URL" \
-            --data "$(node -e "console.log(JSON.stringify({text:'🔴 MyRadio monitor failed on '+process.env.GITHUB_SHA?.slice(0,7)+'\n'+process.argv[1]+'\n'+process.env.GITHUB_SERVER_URL+'/'+process.env.GITHUB_REPOSITORY+'/actions/runs/'+process.env.GITHUB_RUN_ID})" "$SUMMARY")" \
-            || echo "Slack notify skipped/failed"
+        run: node monitor/notify-slack.mjs "$SLACK_WEBHOOK_URL"
