@@ -64,7 +64,7 @@ const SCHEMA = {
 // Produces a Map<id, {segue, summary}> for the ordered queue, or null if
 // unavailable/failed. The whole run goes in one request so the host can write
 // segues aware of flow and context. Music items get a segue but an empty summary.
-export async function generateScript(queue = [], { lengths = {}, context = {}, profile = {} } = {}, ms = 20000) {
+export async function generateScript(queue = [], { lengths = {}, context = {}, profile = {}, opening = true } = {}, ms = 20000) {
   if (!llmAvailable()) return null;
   const items = queue.filter((it) => it && it.title);
   if (!items.length) return new Map();
@@ -82,6 +82,9 @@ export async function generateScript(queue = [], { lengths = {}, context = {}, p
     listener: profile.name || "there",
     context: context.mode || "idle",
     time_of_day: context.timeOfDay || "",
+    // opening = the very start of the session (greet by name on item 1);
+    // false = a continuation batch mid-listen (no greeting, just flow on).
+    opening: !!opening,
     run: payload,
   };
 
@@ -105,7 +108,9 @@ export async function generateScript(queue = [], { lengths = {}, context = {}, p
             role: "user",
             content:
               "Here is the run for this session. Write a segue and (where applicable) a " +
-              "summary for each item, in order. Return one entry per id.\n\n" +
+              "summary for each item, in order. Return one entry per id. " +
+              "If opening is true, greet the listener by name on the first item; if false, " +
+              "this is a continuation mid-session, so do NOT greet — just flow on naturally.\n\n" +
               JSON.stringify(brief),
           },
         ],

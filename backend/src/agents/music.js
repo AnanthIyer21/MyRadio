@@ -11,6 +11,13 @@ const CATALOGUE = [
   { n: 2, title: "Glass Horizon", vibe: "chill", genre: "ambient", energy: 0.35 },
   { n: 6, title: "Slow Tide", vibe: "chill", genre: "lofi", energy: 0.3 },
   { n: 8, title: "Velvet Hours", vibe: "chill", genre: "jazz", energy: 0.25 },
+  { n: 11, title: "Solar Flare", vibe: "upbeat", genre: "electronic", energy: 0.82 },
+  { n: 13, title: "Iron Pulse", vibe: "upbeat", genre: "rock", energy: 0.88 },
+  { n: 16, title: "Circuit Dawn", vibe: "upbeat", genre: "pop", energy: 0.78 },
+  { n: 10, title: "Midnight Loop", vibe: "focus", genre: "electronic", energy: 0.55 },
+  { n: 14, title: "Drift Theory", vibe: "focus", genre: "ambient", energy: 0.5 },
+  { n: 12, title: "Quiet Static", vibe: "chill", genre: "ambient", energy: 0.3 },
+  { n: 15, title: "Paper Moon", vibe: "chill", genre: "jazz", energy: 0.28 },
 ].map((t) => ({
   ...t,
   id: `mus-sh${t.n}`,
@@ -38,7 +45,7 @@ export async function musicAgent(profile = {}, context = {}) {
       _fit: -Math.abs(t.energy - target) + (vibes.includes(t.vibe) ? 0.2 : 0) + (genres.includes(t.genre) ? 0.25 : 0),
     }))
     .sort((a, b) => b._fit - a._fit)
-    .slice(0, 5)
+    .slice(0, 12) // deep enough that the session cycles through many tracks before repeating
     .map(({ _fit, ...t }) => t);
 }
 

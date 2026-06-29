@@ -4,7 +4,11 @@ import { getJson } from "../lib/http.js";
 import { toSummary } from "../lib/summary.js";
 
 export async function audiobookAgent(profile = {}) {
-  const queries = (profile.topics && profile.topics.length ? profile.topics : ["adventure", "classic"]).slice(0, 2);
+  // Vary the search across topics + free-text interests so replenishes on a long
+  // session surface different public-domain titles rather than the same few.
+  const pool = [...(profile.topics || []), ...(profile.keywords || [])]
+    .map((t) => String(t).trim()).filter((t) => t.length > 2);
+  const queries = sample(pool.length ? pool : ["adventure", "classic", "science", "history"], 3);
 
   const settled = await Promise.allSettled(
     queries.map((q) => getJson(`https://gutendex.com/books?search=${encodeURIComponent(q)}&languages=en`))
@@ -57,6 +61,16 @@ function pickBookText(formats = {}) {
     pool[0] ||
     ""
   );
+}
+
+// Distinct random sample of up to n terms.
+function sample(arr, n) {
+  const a = [...new Set(arr)];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
 }
 
 function bookSummary(b) {

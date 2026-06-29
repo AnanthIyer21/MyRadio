@@ -77,14 +77,21 @@ function activityFromContexts() {
 }
 
 // ---------- interview parsing (free text -> structured taste) ----------
+// Keys MUST match the FEED topic labels in backend/src/agents/news.js.
 const TOPIC_WORDS = {
-  world: ["world", "ukraine", "gaza", "global", "war", "international"],
-  technology: ["ai", "tech", "technology", "software", "startup", "openai", "apple", "google", "gadget", "coding", "crypto"],
-  business: ["business", "finance", "economy", "market", "stock", "money", "trade"],
-  science: ["science", "space", "nasa", "physics", "climate", "biology", "research", "health"],
-  sport: ["sport", "sports", "football", "soccer", "arsenal", "nba", "tennis", "f1", "cricket"],
-  culture: ["culture", "film", "movie", "art", "book", "music", "fashion", "celebrity"],
-  politics: ["politics", "election", "government", "policy", "trump", "congress"],
+  world: ["world", "ukraine", "gaza", "israel", "global", "war", "international", "foreign", "geopolitic"],
+  technology: ["tech", "technology", "software", "startup", "apple", "google", "microsoft", "gadget", "coding", "developer", "crypto", "web3", "cyber"],
+  ai: ["ai", "a.i.", "artificial intelligence", "machine learning", "ml", "llm", "openai", "anthropic", "claude", "chatgpt", "gpt", "neural", "deep learning"],
+  business: ["business", "finance", "economy", "economic", "market", "markets", "stock", "stocks", "money", "trade", "startup funding", "vc", "venture"],
+  science: ["science", "physics", "chemistry", "biology", "research", "scientist", "study", "discovery", "genetics"],
+  space: ["space", "nasa", "spacex", "astronomy", "mars", "moon", "rocket", "satellite", "cosmos", "galaxy"],
+  health: ["health", "medicine", "medical", "wellness", "fitness", "mental health", "disease", "nutrition", "covid", "healthcare"],
+  sport: ["sport", "sports", "football", "soccer", "arsenal", "premier league", "nba", "nfl", "tennis", "f1", "formula 1", "cricket", "golf", "baseball"],
+  culture: ["culture", "art", "book", "books", "literature", "fashion", "design", "theatre", "museum"],
+  entertainment: ["entertainment", "film", "movie", "movies", "tv", "television", "netflix", "hollywood", "celebrity", "streaming", "show"],
+  gaming: ["gaming", "game", "games", "video game", "xbox", "playstation", "nintendo", "steam", "esports"],
+  politics: ["politics", "political", "election", "government", "policy", "trump", "biden", "congress", "senate", "parliament"],
+  climate: ["climate", "environment", "environmental", "sustainability", "carbon", "warming", "renewable", "emissions", "green energy"],
 };
 const VIBE_WORDS = { upbeat: ["upbeat", "energetic", "gym", "workout", "party", "hype", "fast", "dance"], focus: ["focus", "study", "work", "concentrate", "coding", "lofi", "lo-fi", "instrumental"], chill: ["chill", "calm", "relax", "evening", "sleep", "ambient", "mellow", "slow"] };
 const GENRE_WORDS = { electronic: ["electronic", "edm", "techno", "house", "dance"], pop: ["pop"], rock: ["rock", "indie", "metal", "punk", "alternative"], classical: ["classical", "orchestra", "piano"], jazz: ["jazz", "blues", "soul"], lofi: ["lofi", "lo-fi", "chillhop"], ambient: ["ambient", "atmospheric"] };
@@ -225,11 +232,15 @@ function startPlayer(plan) {
 function applyPlan(plan) {
   els.mode.textContent = (plan.mode || "idle").replace(/_/g, " ");
   els.explanation.textContent = plan.explanation || "";
-  queue = plan.queue || [];
-  // Premium: play music + podcasts from the listener's own Spotify.
+  queue = withSpotify(plan.queue || []);
+}
+// Premium: swap music + podcast items for the listener's own Spotify content.
+// Used for both the initial plan and every refill batch.
+function withSpotify(items) {
+  let out = items;
   if (spotifyReady() && spotifyMusic.length) {
     const pool = shuffled(spotifyMusic); let si = 0;       // shuffle so it's not the same songs each time
-    queue = queue.map((it) => {
+    out = out.map((it) => {
       if (it.type !== "music") return it;
       const t = pool[si++ % pool.length];
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
@@ -237,12 +248,34 @@ function applyPlan(plan) {
   }
   if (spotifyReady() && spotifyPodcasts.length) {
     const pool = shuffled(spotifyPodcasts); let pi = 0;
-    queue = queue.map((it) => {
+    out = out.map((it) => {
       if (it.type !== "podcast") return it;
       const e = pool[pi++ % pool.length];
       return { ...it, spotifyUri: e.uri, title: e.title, subtitle: `${e.show} · Spotify`, source: "Spotify" };
     });
   }
+  return out;
+}
+
+// Continuous radio: when the queue nears its end, pull the next batch from the
+// backend and append it — so the station keeps producing as you skip / listen on.
+const REFILL_AHEAD = 2; // start fetching when this many items remain ahead
+let fetchingMore = false;
+async function ensureAhead() {
+  if (!live || fetchingMore) return;
+  if (index < queue.length - REFILL_AHEAD) return;   // still plenty queued
+  fetchingMore = true;
+  try {
+    const r = await fetch(`${API}/api/next`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: USER, signals: signals() }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const more = withSpotify(data.queue || []);
+      if (more.length) { queue = queue.concat(more); renderQueue(); }
+    }
+  } catch {} finally { fetchingMore = false; }
 }
 
 // ---- content resolution (may fetch full text) ----
@@ -290,6 +323,7 @@ async function loadCurrent(autoplay = false) {
   els.npTitle.textContent = item.title;
   els.npSub.textContent = item.subtitle || item.source || "";
   resetReactions(); renderQueue();
+  ensureAhead();                                  // prefetch more when near the end
   els.npBar.style.width = "0%"; els.npCur.textContent = "0:00"; els.npRem.textContent = "";
 
   const d = await resolveContent(item);
@@ -411,7 +445,12 @@ els.npProgress.onclick = (e) => {
 };
 async function advance() {
   history.push(index); index += 1;
-  if (index >= queue.length) { applyPlan(await getPlan()); index = 0; history.length = 0; }
+  await ensureAhead();                          // try to keep items queued ahead
+  if (index >= queue.length) {
+    // Refill couldn't extend the queue (offline, or pool exhausted).
+    if (live) { applyPlan(await getPlan()); index = 0; history.length = 0; }
+    else { index = 0; }                          // local demo loops
+  }
   loadCurrent(true);
 }
 function setToggle(playing) { els.toggle.textContent = playing ? "❚❚" : "▶"; }
@@ -423,7 +462,9 @@ els.save.onclick = () => { els.save.classList.toggle("on"); event("save"); };
 els.dislike.onclick = () => { els.dislike.classList.add("on"); event("dislike"); setTimeout(() => { event("skip"); advance(); }, 250); };
 async function event(type) {
   const item = queue[index]; if (!item || !live) return;
-  try { await fetch(`${API}/api/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: USER, itemId: item.id, type }) }); } catch {}
+  // Send the item's content-type + topic so the backend can learn affinity, not
+  // just a per-item reward — this is what makes skipping/liking steer the radio.
+  try { await fetch(`${API}/api/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: USER, itemId: item.id, type, itemType: item.type, itemTopic: item.topic }) }); } catch {}
 }
 
 function renderQueue() {
