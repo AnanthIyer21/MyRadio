@@ -2,7 +2,18 @@
 // Onboarding interview (free text + dictation) -> orchestrated station -> player.
 // Playback per item: music = full audio (Spotify Premium if connected, else royalty-free);
 // news/podcast/audiobook = AI summary (condensed, spoken) or full (read aloud / full episode).
-const API = "http://localhost:8787";
+
+// Spotify's PKCE flow stores the one-time code_verifier in localStorage, which is
+// partitioned by origin. "localhost" and "127.0.0.1" are DIFFERENT origins, and the
+// registered Spotify redirect URI is 127.0.0.1 — so if the page is opened on localhost,
+// the verifier saved here is gone after the redirect and the token exchange fails.
+// Force the whole app onto the 127.0.0.1 origin so the flow round-trips correctly.
+if (location.hostname === "localhost") {
+  location.replace(location.href.replace("://localhost", "://127.0.0.1"));
+}
+
+// Talk to the backend on whatever host the page is served from (keeps a single origin).
+const API = `http://${location.hostname || "127.0.0.1"}:8787`;
 const USER = "demo";
 const speechOK = "speechSynthesis" in window;
 const CPS = 15; // approx chars/sec of speech, for spoken progress + seeking
@@ -500,7 +511,12 @@ function localPlan() {
         spotifyCtx = await MyRadioSpotify.loadContext();
         if (spotifyCtx.premium) { await MyRadioSpotify.initPlayer(); spotifyMusic = spotifyCtx.topTracks || []; spotifyPodcasts = spotifyCtx.topShows || []; }
         updateSpotifyUI();
-      } catch {}
+      } catch (e) {
+        if (els.obSpotifyStatus) els.obSpotifyStatus.textContent = `Couldn't load your Spotify data: ${e.message || e}`;
+      }
+    } else if (MyRadioSpotify.lastError && MyRadioSpotify.lastError()) {
+      // Login was attempted but didn't complete — show why instead of failing silently.
+      if (els.obSpotifyStatus) els.obSpotifyStatus.textContent = MyRadioSpotify.lastError();
     }
   }
   // Always land on the onboarding interview (a reload should NOT skip to the player).

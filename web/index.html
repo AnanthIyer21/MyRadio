@@ -4,7 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MyRadio AI</title>
-  <link rel="stylesheet" href="styles.css" />
+  <!-- Spotify's PKCE flow + the onboarding draft both live in localStorage, which is
+       partitioned by origin. "localhost" and "127.0.0.1" are DIFFERENT origins, and the
+       registered Spotify redirect URI is 127.0.0.1 — so anything saved on localhost is
+       lost after the redirect (empty form + failed login). Force 127.0.0.1 FIRST, before
+       any script runs or the user types, so everything stays on one origin. -->
+  <script>
+    if (location.hostname === "localhost") {
+      location.replace(location.href.replace("://localhost", "://127.0.0.1"));
+    }
+  </script>
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
   <div class="topbar">
@@ -140,9 +150,9 @@
     <audio id="bed" loop></audio>
   </main>
 
-  <script src="config.js"></script>
-  <script src="spotify.js"></script>
-  <script src="wispr.js"></script>
-  <script src="app.js"></script>
+  <script src="config.js?v=5"></script>
+  <script src="spotify.js?v=5"></script>
+  <script src="wispr.js?v=5"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

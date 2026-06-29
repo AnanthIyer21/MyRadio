@@ -16,6 +16,15 @@
 
   let player = null, deviceId = null, premium = false, ready = false;
   let stateCb = null;
+  let lastError = "";
+
+  // Capture the OAuth redirect params SYNCHRONOUSLY at script load, before any await.
+  // The ?code lives in the URL only briefly after Spotify redirects back — privacy
+  // extensions, the browser, or async boot delays can strip it before handleRedirect
+  // runs, which silently aborts the login. Grabbing it here makes the flow robust.
+  const _initial = new URLSearchParams(location.search);
+  const CAPTURED_CODE = _initial.get("code");
+  const CAPTURED_ERROR = _initial.get("error");
 
   const configured = () => !!CLIENT_ID;
 
@@ -38,12 +47,17 @@
   }
 
   async function exchange(code) {
+    const verifier = localStorage.getItem(LS.cv) || "";
+    if (!verifier) throw new Error("missing PKCE verifier — was 'Connect' clicked from a different origin (e.g. localhost vs 127.0.0.1)?");
     const body = new URLSearchParams({
       client_id: CLIENT_ID, grant_type: "authorization_code", code,
-      redirect_uri: REDIRECT, code_verifier: localStorage.getItem(LS.cv) || "",
+      redirect_uri: REDIRECT, code_verifier: verifier,
     });
     const r = await fetch(TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
-    if (!r.ok) throw new Error("token exchange failed");
+    if (!r.ok) {
+      const detail = await r.text().catch(() => "");
+      throw new Error(`token exchange failed (${r.status}): ${detail}`);
+    }
     store(await r.json());
   }
 
@@ -162,23 +176,33 @@
   const getState = () => (player ? player.getCurrentState() : Promise.resolve(null));
   const pause = () => player && player.pause();
 
+  // Cosmetic only: clear ?code from the address bar after we've captured it. Wrapped
+  // because some privacy extensions/browsers remove history.replaceState — if that throws,
+  // the login must still complete (the code is already captured in CAPTURED_CODE).
+  function cleanUrl() { try { history.replaceState({}, "", REDIRECT); } catch { /* history API unavailable; harmless */ } }
+
   // Handle the redirect back from Spotify; returns true if a fresh login happened.
   async function handleRedirect() {
-    const p = new URLSearchParams(location.search);
-    const code = p.get("code");
+    // Use the params captured at script load, not the (possibly already-stripped) live URL.
+    const err = CAPTURED_ERROR;
+    const code = CAPTURED_CODE;
+    if (err) {
+      lastError = `Spotify declined the login: ${err}. (If the app is in Development mode, your Spotify account must be added under "User Management" in the dashboard.)`;
+      cleanUrl();
+      return false;
+    }
     if (!code) return false;
-    history.replaceState({}, "", REDIRECT); // strip ?code immediately so a reload can't reuse it
-    // If we already hold a valid token (boot ran twice / reload), don't re-exchange a used code.
-    if (localStorage.getItem(LS.at) && Date.now() < Number(localStorage.getItem(LS.exp) || 0)) return true;
-    try { await exchange(code); return true; }
-    catch (e) { console.warn("Spotify token exchange failed:", e); return false; }
+    // Already hold a valid token (boot ran twice / reload)? Don't re-exchange a used code.
+    if (localStorage.getItem(LS.at) && Date.now() < Number(localStorage.getItem(LS.exp) || 0)) { cleanUrl(); return true; }
+    try { await exchange(code); cleanUrl(); return true; }
+    catch (e) { lastError = String(e.message || e); console.warn("Spotify token exchange failed:", e); cleanUrl(); return false; }
   }
 
   window.MyRadioSpotify = {
     configured, connect, handleRedirect, isConnected, loadContext,
     initPlayer, play, pause, togglePlay, seek, getState,
     onState: (cb) => { stateCb = cb; },
-    isPremium: () => premium, isReady: () => ready,
+    isPremium: () => premium, isReady: () => ready, lastError: () => lastError,
     search: (q, type = "track") => api(`/search?type=${type}&limit=10&q=${encodeURIComponent(q)}`),
   };
 })();
