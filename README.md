@@ -55,20 +55,30 @@ MyRadio/
 
 ```bash
 cd backend
-npm install
-npm start
+npm start            # node src/server.js — zero dependencies, no install needed
 ```
 
 API runs on `http://localhost:8787`. Health check: `GET /health`.
 
+**Optional — generated spoken summaries (Claude):** set `ANTHROPIC_API_KEY` and the
+queue's news/podcast/audiobook blurbs are rewritten into warm, length-matched spoken
+summaries via Claude (`claude-haiku-4-5` by default; override with `ANTHROPIC_MODEL`).
+Without the key, the app falls back to extractive summaries and works unchanged.
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... npm start
+```
+
 ## Run The Web App
 
 ```bash
-cd web && python3 -m http.server 8080   # then open http://localhost:8080
+cd web && node serve.js   # no-cache static server; then open http://127.0.0.1:8080
 ```
 
-Start the backend too (above) for live content + personalization; without it the
-app runs in a local demo mode that still plays music.
+Open the app at **`http://127.0.0.1:8080`** (not `localhost`) — Spotify's PKCE login
+requires the `127.0.0.1` loopback redirect, and the no-cache server guarantees code
+changes take effect on reload. Start the backend too (above) for live content +
+personalization; without it the app runs in a local demo mode that still plays music.
 
 ## Status
 

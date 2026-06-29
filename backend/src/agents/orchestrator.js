@@ -5,6 +5,7 @@ import { podcastAgent } from "./podcasts.js";
 import { audiobookAgent } from "./audiobooks.js";
 import { musicAgent } from "./music.js";
 import { scoreAndDiversify, explain } from "../planner.js";
+import { generateSummaries } from "../lib/llm.js";
 
 const AGENTS = [
   ["news", newsAgent],
@@ -29,6 +30,15 @@ export async function orchestrate(profile = {}, context = {}, n = 6) {
   });
 
   const queue = scoreAndDiversify(candidates, profile, context, n);
+
+  // Upgrade the extractive blurbs on the chosen items to generated, spoken-word
+  // summaries via Claude — only the queue (not every candidate), so it stays cheap.
+  // Falls back to the existing item.summary if no API key or the call fails.
+  try {
+    const summaries = await generateSummaries(queue, { lengths: profile.lengths });
+    if (summaries) for (const it of queue) if (summaries.has(it.id)) it.summary = summaries.get(it.id);
+  } catch { /* keep extractive summaries */ }
+
   return {
     mode: context.mode || "idle",
     explanation: explain(context.mode),
