@@ -1,0 +1,51 @@
+name: MyRadio monitor
+
+# Checks that MyRadio actually works on every push / PR to main, plus a daily
+# safety run. Runs the full monitor: unit tests, web syntax, backend boot,
+# onboarding -> session-plan, playable audio, feedback loop.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 15 * * *" # 08:00 PT daily safety net
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run MyRadio monitor
+        id: monitor
+        run: |
+          set -o pipefail
+          node monitor/check.mjs --json | tee monitor-report.json
+          node monitor/check.mjs # human-readable to the log; sets the job pass/fail
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-report
+          path: monitor-report.json
+
+      # Optional Slack DM/channel alert on failure.
+      # Add a repo secret SLACK_WEBHOOK_URL (Slack Incoming Webhook) to enable.
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          SUMMARY=$(node -e "const r=require('./monitor-report.json');console.log(r.results.filter(x=>!x.ok).map(x=>'• '+x.name+': '+x.detail).join('\n')||'see logs')" 2>/dev/null || echo "see workflow logs")
+          curl -sf -X POST -H 'content-type: application/json' "$SLACK_WEBHOOK_URL" \
+            --data "$(node -e "console.log(JSON.stringify({text:'🔴 MyRadio monitor failed on '+process.env.GITHUB_SHA?.slice(0,7)+'\n'+process.argv[1]+'\n'+process.env.GITHUB_SERVER_URL+'/'+process.env.GITHUB_REPOSITORY+'/actions/runs/'+process.env.GITHUB_RUN_ID})" "$SUMMARY")" \
+            || echo "Slack notify skipped/failed"
