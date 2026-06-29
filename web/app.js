@@ -253,7 +253,8 @@ async function fetchText(endpoint, url) {
   try { const d = await (await fetch(`${API}/${endpoint}?url=${encodeURIComponent(url)}`)).json(); bodyCache.set(url, d.text || ""); return d.text || ""; }
   catch { return ""; }
 }
-const lead = (it) => it.type === "news" ? `Here's the latest from ${it.source}. ` : it.type === "podcast" ? `From ${it.source}. ` : it.type === "audiobook" ? `From ${it.title}. ` : "";
+// Prefer the producer's context-aware spoken segue; fall back to a static intro.
+const lead = (it) => (it.segue ? it.segue.trim() + " " : it.type === "news" ? `Here's the latest from ${it.source}. ` : it.type === "podcast" ? `From ${it.source}. ` : it.type === "audiobook" ? `From ${it.title}. ` : "");
 function condense(text, seconds) {
   if (!seconds) return text;                              // 0 = "full"
   const target = Math.round(seconds * 2.6), out = []; let w = 0;

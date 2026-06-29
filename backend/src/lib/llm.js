@@ -14,14 +14,22 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
 
 export const llmAvailable = () => !!process.env.ANTHROPIC_API_KEY;
 
-// A radio host writing TTS-friendly copy: no markdown, no headers, no emoji —
-// just clean sentences calibrated to how long the listener wants to listen.
+// A radio host/producer writing TTS-friendly copy: no markdown, no headers, no
+// emoji — just clean sentences calibrated to how long the listener wants to listen.
 const SYSTEM =
-  "You are the host of a personal AI radio station. For each item, write a warm, " +
-  "natural spoken-word summary that will be read aloud by a text-to-speech voice. " +
+  "You are the host and producer of a personal AI radio station. You receive the " +
+  "ordered run of items (news, podcasts, audiobooks, music) for one listening session, " +
+  "the listener's name, and the listening context (e.g. morning_commute, workout, " +
+  "evening_wind_down). For EACH item write two things:\n" +
+  "1. `segue`: one short spoken line introducing the item, like a real DJ — aware of " +
+  "where it sits in the run (greet the listener by name on the first item; use natural " +
+  "transitions like 'up next' or 'let's slow things down' afterward) and of the context " +
+  "(energy and tone should fit the mode). One sentence, conversational.\n" +
+  "2. `summary`: for news/podcasts/audiobooks, a warm spoken summary read to roughly the " +
+  "given target_seconds; lead with what matters and stay factual to the source blurb. For " +
+  "music items, return an empty string for summary.\n" +
   "Plain sentences only — no markdown, lists, headings, emoji, or stage directions. " +
-  "Lead with what matters, stay factual to the source blurb, and write to roughly the " +
-  "target spoken length given for each item. Do not invent facts beyond the blurb.";
+  "Never invent facts beyond each item's blurb.";
 
 // Per-type fallbacks (seconds of speech) when the listener hasn't set a length.
 const DEFAULT_SECONDS = { news: 40, podcast: 90, audiobook: 90 };
@@ -35,35 +43,47 @@ function targetSeconds(type, lengths = {}) {
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["summaries"],
+  required: ["items"],
   properties: {
-    summaries: {
+    items: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "text"],
-        properties: { id: { type: "string" }, text: { type: "string" } },
+        required: ["id", "segue", "summary"],
+        properties: {
+          id: { type: "string" },
+          segue: { type: "string" }, // one-line spoken intro for this item
+          summary: { type: "string" }, // spoken body; "" for music
+        },
       },
     },
   },
 };
 
-// Returns a Map<id, summaryText> for the given items, or null if unavailable/failed.
-// Items without a title or of type "music" are skipped (music needs no summary).
-export async function generateSummaries(items = [], { lengths = {} } = {}, ms = 20000) {
+// Produces a Map<id, {segue, summary}> for the ordered queue, or null if
+// unavailable/failed. The whole run goes in one request so the host can write
+// segues aware of flow and context. Music items get a segue but an empty summary.
+export async function generateScript(queue = [], { lengths = {}, context = {}, profile = {} } = {}, ms = 20000) {
   if (!llmAvailable()) return null;
-  const targets = items.filter((it) => it && it.title && it.type !== "music");
-  if (!targets.length) return new Map();
+  const items = queue.filter((it) => it && it.title);
+  if (!items.length) return new Map();
 
-  const payload = targets.map((it) => ({
+  const payload = items.map((it, i) => ({
     id: it.id,
+    position: i + 1,
     type: it.type,
     title: it.title,
     source: it.source || it.subtitle || "",
-    blurb: it.summary || "",
-    target_seconds: targetSeconds(it.type, lengths),
+    blurb: it.type === "music" ? "" : it.summary || "",
+    target_seconds: it.type === "music" ? 0 : targetSeconds(it.type, lengths),
   }));
+  const brief = {
+    listener: profile.name || "there",
+    context: context.mode || "idle",
+    time_of_day: context.timeOfDay || "",
+    run: payload,
+  };
 
   try {
     const r = await fetch(API, {
@@ -76,7 +96,7 @@ export async function generateSummaries(items = [], { lengths = {} } = {}, ms = 
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2048,
+        max_tokens: 3072,
         system: SYSTEM,
         // Structured output guarantees the first text block is valid JSON.
         output_config: { format: { type: "json_schema", schema: SCHEMA } },
@@ -84,24 +104,28 @@ export async function generateSummaries(items = [], { lengths = {} } = {}, ms = 
           {
             role: "user",
             content:
-              "Write spoken summaries for these radio items. Return one summary per id.\n\n" +
-              JSON.stringify(payload),
+              "Here is the run for this session. Write a segue and (where applicable) a " +
+              "summary for each item, in order. Return one entry per id.\n\n" +
+              JSON.stringify(brief),
           },
         ],
       }),
     });
     if (!r.ok) {
-      console.warn(`[llm] summaries ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`);
+      console.warn(`[llm] script ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`);
       return null;
     }
     const data = await r.json();
     const text = (data.content || []).find((b) => b.type === "text")?.text || "";
     const parsed = JSON.parse(text);
     const out = new Map();
-    for (const s of parsed.summaries || []) if (s && s.id && s.text) out.set(s.id, s.text.trim());
+    for (const s of parsed.items || []) {
+      if (!s || !s.id) continue;
+      out.set(s.id, { segue: (s.segue || "").trim(), summary: (s.summary || "").trim() });
+    }
     return out;
   } catch (e) {
-    console.warn("[llm] summaries failed:", e?.message || e);
+    console.warn("[llm] script failed:", e?.message || e);
     return null;
   }
 }

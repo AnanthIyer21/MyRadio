@@ -5,7 +5,7 @@ import { podcastAgent } from "./podcasts.js";
 import { audiobookAgent } from "./audiobooks.js";
 import { musicAgent } from "./music.js";
 import { scoreAndDiversify, explain } from "../planner.js";
-import { generateSummaries } from "../lib/llm.js";
+import { generateScript } from "../lib/llm.js";
 
 const AGENTS = [
   ["news", newsAgent],
@@ -31,13 +31,19 @@ export async function orchestrate(profile = {}, context = {}, n = 6) {
 
   const queue = scoreAndDiversify(candidates, profile, context, n);
 
-  // Upgrade the extractive blurbs on the chosen items to generated, spoken-word
-  // summaries via Claude — only the queue (not every candidate), so it stays cheap.
-  // Falls back to the existing item.summary if no API key or the call fails.
+  // Producer pass: one Claude call over the ordered queue writes a spoken segue
+  // (DJ intro) per item and upgrades the extractive blurbs to spoken summaries.
+  // Only the queue (not every candidate), so it stays cheap. Falls back to the
+  // static client-side lead + extractive item.summary if no key or on error.
   try {
-    const summaries = await generateSummaries(queue, { lengths: profile.lengths });
-    if (summaries) for (const it of queue) if (summaries.has(it.id)) it.summary = summaries.get(it.id);
-  } catch { /* keep extractive summaries */ }
+    const script = await generateScript(queue, { lengths: profile.lengths, context, profile });
+    if (script) for (const it of queue) {
+      const s = script.get(it.id);
+      if (!s) continue;
+      if (s.segue) it.segue = s.segue;
+      if (s.summary && it.type !== "music") it.summary = s.summary;
+    }
+  } catch { /* keep extractive summaries + static lead */ }
 
   return {
     mode: context.mode || "idle",
