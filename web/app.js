@@ -54,6 +54,11 @@ const shuffled = (arr) => arr.map((v) => [Math.random(), v]).sort((a, b) => a[0]
 // timers
 let speakTimer = null, spPoll = null;
 let speakText = "", speakPos = 0;
+// Speech reliability state: retain the utterance (so it isn't GC'd mid-speech),
+// a keepalive against Chrome's ~15s auto-pause, and a watchdog for "never started".
+let speakUtter = null, speakKeepalive = null, speakWatchdog = null, speakStarted = false;
+let voicesReady = !speechOK || (speechSynthesis.getVoices && speechSynthesis.getVoices().length > 0);
+if (speechOK && !voicesReady) { try { speechSynthesis.onvoiceschanged = () => { voicesReady = true; }; } catch {} }
 // playback length cap: a non-"Full" length slider stops the item after N seconds.
 let playCap = 0, capped = false;
 
@@ -350,7 +355,7 @@ function noteFor(item, d) {
 
 function startPlayback(d) {
   if (d.kind === "audio") { els.audio.src = d.audioUrl; playAudio(); stopBed(); }
-  else if (d.kind === "speak") { startSpeakFrom(d.text, 0); startBed(); }  // gentle ambient under speech
+  else if (d.kind === "speak") { startSpeakFrom(d.text, 0); }  // bed starts only when speech actually begins
   else if (d.kind === "spotify") { startSpotify(d.uri); stopBed(); }
   event("play");
 }
@@ -358,6 +363,7 @@ function stopPlayback() {
   els.audio.pause(); els.audio.removeAttribute("src");
   if (speechOK) speechSynthesis.cancel();
   clearInterval(speakTimer); speakTimer = null;
+  stopKeepalive(); clearTimeout(speakWatchdog); speakWatchdog = null; speakUtter = null;
   clearInterval(spPoll); spPoll = null;
   if (window.MyRadioSpotify && MyRadioSpotify.isReady()) MyRadioSpotify.pause();
   stopBed();
@@ -376,13 +382,65 @@ els.audio.ontimeupdate = () => {
 els.audio.onended = () => { event("complete"); advance(); };
 
 // ---- speak (summary / full read-aloud) with char-based seek ----
-function startSpeakFrom(text, posChars) {
-  speechSynthesis.cancel();
+// Speech is the source of truth: the ambient bed + progress bar start on onstart,
+// and an error/watchdog path surfaces "unavailable" instead of leaving bed-only
+// silence (the classic Chrome speechSynthesis failure mode).
+function startSpeakFrom(text, posChars, isRetry = false) {
   speakText = text; speakPos = Math.max(0, Math.min(posChars, text.length));
-  const u = new SpeechSynthesisUtterance(text.slice(speakPos)); u.rate = 1.03;
-  u.onend = () => { if (mode === "speak") { stopSpeakTimer(); event("complete"); advance(); } };
-  speechSynthesis.speak(u); setToggle(true); startSpeakTimer();
+  if (!speechOK) { startSpeakTimer(); startBed(); setToggle(true); return; } // no TTS: timer-driven progress
+  clearTimeout(speakWatchdog); speakWatchdog = null;
+  stopKeepalive();
+  speakUtter = null;          // supersede any prior utterance: its callbacks now no-op
+  speechSynthesis.cancel();   // (cancel can fire the old utterance's onend/onerror)
+  speakStarted = false;
+
+  const begin = () => {
+    const u = new SpeechSynthesisUtterance(speakText.slice(speakPos));
+    u.rate = 1.03;
+    speakUtter = u; // retain the reference so the utterance isn't GC'd mid-speech
+    // Every handler bails if its utterance is no longer the current one — so a
+    // cancel()-induced error from a superseded utterance can't retry or advance.
+    u.onstart = () => {
+      if (speakUtter !== u) return;
+      speakStarted = true;
+      clearTimeout(speakWatchdog); speakWatchdog = null;
+      startBed(); startSpeakTimer(); startKeepalive(); setToggle(true);
+    };
+    u.onend = () => { if (speakUtter === u && mode === "speak") { stopSpeakTimer(); stopKeepalive(); event("complete"); advance(); } };
+    u.onerror = () => {
+      if (speakUtter !== u) return;
+      if (!speakStarted && !isRetry) { startSpeakFrom(speakText, speakPos, true); return; } // one retry
+      stopSpeakTimer(); stopKeepalive(); stopBed();
+      els.npNote.textContent = "🔇 Spoken summary unavailable — skipping.";
+      setToggle(false);
+      if (mode === "speak") setTimeout(() => advance(), 700);
+    };
+    speechSynthesis.speak(u);
+    // Watchdog: if speech never actually starts (onstart never fires), retry once,
+    // then give up gracefully rather than play the bed with no voice.
+    speakWatchdog = setTimeout(() => {
+      if (speakUtter !== u || speakStarted) return;
+      if (!isRetry) { startSpeakFrom(speakText, speakPos, true); }
+      else { stopBed(); stopSpeakTimer(); els.npNote.textContent = "🔇 Spoken summary unavailable — skipping."; setToggle(false); if (mode === "speak") advance(); }
+    }, 1800);
+  };
+
+  // Defer a tick so cancel() settles before speak() (avoids the 'canceled' race),
+  // and on the very first run wait for Chrome to populate voices.
+  if (voicesReady) { setTimeout(begin, 0); }
+  else {
+    let fired = false;
+    const go = () => { if (fired) return; fired = true; voicesReady = true; begin(); };
+    try { speechSynthesis.onvoiceschanged = go; } catch {}
+    setTimeout(go, 400); // fallback if onvoiceschanged never fires
+  }
 }
+function startKeepalive() {
+  stopKeepalive();
+  // Chrome silently pauses speech after ~15s; a periodic resume() keeps long summaries going.
+  speakKeepalive = setInterval(() => { try { if (speechSynthesis.speaking && !speechSynthesis.paused) speechSynthesis.resume(); } catch {} }, 10000);
+}
+function stopKeepalive() { clearInterval(speakKeepalive); speakKeepalive = null; }
 function startSpeakTimer() {
   stopSpeakTimer();
   speakTimer = setInterval(() => {
@@ -419,9 +477,9 @@ async function startSpotify(uri) {
 els.toggle.onclick = () => {
   if (mode === "audio") { els.audio.getAttribute("src") && (els.audio.paused ? playAudio() : (els.audio.pause(), setToggle(false))); }
   else if (mode === "speak") {
-    if (speechSynthesis.speaking && !speechSynthesis.paused) { speechSynthesis.pause(); stopSpeakTimer(); stopBed(); setToggle(false); }
-    else if (speechSynthesis.paused) { speechSynthesis.resume(); startSpeakTimer(); startBed(); setToggle(true); }
-    else { startSpeakFrom(speakText, speakPos); startBed(); }
+    if (speechSynthesis.speaking && !speechSynthesis.paused) { speechSynthesis.pause(); stopSpeakTimer(); stopKeepalive(); stopBed(); setToggle(false); }
+    else if (speechSynthesis.paused) { speechSynthesis.resume(); startSpeakTimer(); startKeepalive(); startBed(); setToggle(true); }
+    else { startSpeakFrom(speakText, speakPos); } // bed restarts on onstart
   } else if (mode === "spotify") { MyRadioSpotify.togglePlay(); }
 };
 els.back10.onclick = () => skipBy(-10);
