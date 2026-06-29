@@ -60,6 +60,7 @@ for (const it of queue) {
   const need = { news: "url", podcast: "audioUrl", audiobook: "textUrl", music: "audioUrl" }[it.type];
   if (need && !it[need]) add({ severity: "med", area: `${it.type} item`, symptom: `Missing "${need}" — the player can't fully resolve this ${it.type}.`, evidence: `id=${it.id} title="${(it.title || "").slice(0, 50)}"`, fix: `Ensure the ${it.type} agent always sets ${need} (or filters items that lack it).` });
   if (it.source === "seed" || /(^|-)seed/.test(it.id || "")) add({ severity: "med", area: `${it.type} fallback`, symptom: `A "seed"/offline-demo ${it.type} is in a LIVE station — user sees fake demo content.`, evidence: `id=${it.id} source=${it.source}`, fix: `Upstream fetch failed and silently fell back to seed(); either retry, drop the slot, or label it clearly.` });
+  if (it.type === "audiobook" && /-readme\.txt|\.zip$|index\.html?$|\/dirs?\//i.test(it.textUrl || "")) add({ severity: "high", area: "audiobook source", symptom: "Audiobook textUrl points to a non-book file (Gutenberg README/zip/index) — the player reads a file-distribution notice aloud, not the book.", evidence: it.textUrl, fix: "In audiobooks.js, pick the real book text: prefer formats like NN-0.txt / NN.txt and EXCLUDE *-README.txt, *.zip, dir listings; verify the chosen URL isn't a README." });
   if (ENTITY.test(it.title || "") || ENTITY.test(it.summary || "")) add({ severity: "med", area: `${it.type} text`, symptom: `Raw HTML entity in title/summary — shown/spoken literally.`, evidence: `id=${it.id} "${(it.title || it.summary || "").match(ENTITY)}"`, fix: "Decode HTML entities in the agent before returning." });
   if (/&amp;/.test(it.audioUrl || "")) add({ severity: "med", area: `${it.type} media`, symptom: `audioUrl contains un-decoded "&amp;" — query params become malformed (broken tracking/redirects).`, evidence: (it.audioUrl || "").slice(0, 80), fix: "Decode RSS entities (&amp;→&) when parsing enclosure URLs." });
 }
@@ -80,7 +81,7 @@ if (book) {
   const txt = body?.text || "";
   const head = txt.slice(0, 600).toUpperCase();
   if (!txt) add({ severity: "med", area: "audiobook full read", symptom: "Book text extraction returned empty.", evidence: `textUrl=${book.textUrl}`, fix: "Handle this Gutenberg text layout." });
-  else if (/PROJECT GUTENBERG|START OF (THE|THIS)|\bLICENSE\b/.test(head)) add({ severity: "high", area: "audiobook full read", symptom: "Book text starts with Project Gutenberg license/boilerplate — the audiobook reads legal text aloud instead of the book.", evidence: txt.slice(0, 90).replace(/\s+/g, " "), fix: "cleanBookText must strip the header up to '*** START OF...' and footer from '*** END OF...'; the fetch window (getText cap in server.js) may also truncate before the START marker — raise it." });
+  else if (/PROJECT GUTENBERG|START OF (THE|THIS)|\bLICENSE\b|DISTRIBUTED IN SEVERAL|THIS FILE:/.test(head)) add({ severity: "high", area: "audiobook full read", symptom: "Book text starts with Gutenberg boilerplate (license or file-distribution README) — the audiobook reads notices aloud instead of the book.", evidence: txt.slice(0, 90).replace(/\s+/g, " "), fix: "Pick the actual book text file (not a README/distribution notice), and in cleanBookText strip the header up to '*** START OF...' and footer from '*** END OF...'; the getText fetch cap in server.js may also truncate before the START marker — raise it." });
 }
 
 // 4. Audiobook relevance (soft): does the book relate to the listener's topics?
@@ -91,8 +92,10 @@ if (anyBook && anyBook.source !== "seed") {
     add({ severity: "low", area: "audiobook relevance", symptom: "Audiobook looks unrelated to the listener's topics (Gutendex full-text search matches odd catalogs).", evidence: `topics=[${topics}] book="${(anyBook.title || "").slice(0, 60)}"`, fix: "Search Gutendex by subject/topic mapping, or curate a per-topic shortlist." });
 }
 
-// 5. Frontend note that the API can't reveal (kept as a standing reminder).
-add({ severity: "low", area: "queue UI", symptom: "Every queue row renders a static '▶ audio' label (web/app.js renderQueue), even for spoken summaries / news / audiobooks — misleading.", evidence: "web/app.js ~line 435", fix: "Label rows by what they actually play: 'audio' for music/full episode, 'spoken' for summaries." });
+// 5. Frontend / product notes the server API can't reveal (standing reminders,
+//    each verified live in the browser walkthrough).
+add({ severity: "low", area: "queue UI", symptom: "Every queue row renders a static '▶ audio' label (web/app.js renderQueue), even for spoken summaries / news / audiobooks — misleading (confirmed live).", evidence: "web/app.js ~line 435", fix: "Label rows by what they actually play: 'audio' for music/full episode, 'spoken' for summaries." });
+add({ severity: "med", area: "music taste vs Spotify", symptom: "When Spotify Premium is connected, the station ignores the stated music vibe/genres and plays the listener's Spotify top tracks (e.g. asked for 'upbeat electronic/lo-fi', got Bad Bunny). Energy/context matching is lost for music.", evidence: "applyPlan() in web/app.js replaces every music item with shuffled spotifyMusic regardless of vibe/energy", fix: "Filter/rank the Spotify pool by the requested vibe/genre and the context energy before substituting, instead of plain shuffle." });
 
 finish();
 
