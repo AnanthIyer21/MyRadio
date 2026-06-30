@@ -200,7 +200,7 @@ $("ob-start").onclick = async () => {
   };
   persist();
   try { localStorage.removeItem("myradio_draft"); } catch {}
-  await refreshSpotifyPodcasts();   // Premium: widen the podcast pool before the first batch
+  await Promise.all([refreshSpotifyPodcasts(), refreshSpotifyMusic()]); // Premium: vibe-matched pools before the first batch
   startPlayer(await onboard());
 };
 
@@ -215,6 +215,50 @@ async function refreshSpotifyPodcasts() {
     const seen = new Set(spotifyPodcasts.map((e) => e.uri));
     spotifyPodcasts = spotifyPodcasts.concat(found.filter((e) => e?.uri && !seen.has(e.uri)));
   } catch { /* keep saved-show pool (or none) — withSpotify falls back to RSS */ }
+}
+
+// Premium only: build a music pool that HONOURS the listener's stated vibe/genre via catalogue
+// search (e.g. "upbeat electronic", "chill lofi"), each query tagged with the energy its vibe
+// implies. This becomes the primary pool so the station plays what they asked for — not just
+// their top tracks — while their library stays as an energy-neutral fallback. (Spotify's
+// audio-features API is deprecated for new apps, so we infer energy from the vibe, not the track.)
+// Search by GENRE terms (which return real songs) rather than bare vibe words like "upbeat"
+// (which surface SEO "study/workout music" filler). Each carries the genre's characteristic
+// energy so context matching still works. Vibes with no genre map to representative genres.
+const GENRE_Q = {
+  electronic: [{ q: "electronic", e: 0.78 }, { q: "electro house", e: 0.85 }, { q: "house music", e: 0.80 }],
+  pop:        [{ q: "pop hits", e: 0.70 }, { q: "dance pop", e: 0.78 }],
+  rock:       [{ q: "rock anthems", e: 0.80 }, { q: "indie rock", e: 0.65 }],
+  classical:  [{ q: "classical", e: 0.38 }, { q: "piano", e: 0.35 }],
+  jazz:       [{ q: "jazz", e: 0.42 }, { q: "smooth jazz", e: 0.35 }],
+  lofi:       [{ q: "lofi hip hop", e: 0.30 }, { q: "chillhop", e: 0.32 }],
+  ambient:    [{ q: "ambient", e: 0.30 }, { q: "chillout", e: 0.32 }],
+};
+const VIBE_Q = {
+  upbeat: [{ q: "dance hits", e: 0.85 }, { q: "electro house", e: 0.85 }],
+  focus:  [{ q: "lofi hip hop", e: 0.45 }, { q: "instrumental", e: 0.50 }],
+  chill:  [{ q: "chillout", e: 0.32 }, { q: "ambient", e: 0.30 }],
+};
+async function refreshSpotifyMusic() {
+  if (!spotifyReady() || !profile) return;
+  const vibes = (profile.musicVibes || []).map(String);
+  const genres = (profile.genres || []).map(String);
+  const queries = []; const seenQ = new Set();
+  const push = (q, energy) => { q = (q || "").trim().toLowerCase(); if (q && !seenQ.has(q)) { seenQ.add(q); queries.push({ q, energy }); } };
+  for (const g of genres) for (const x of (GENRE_Q[g] || [])) push(x.q, x.e);
+  // Fall back to vibe→genre searches only when a vibe was named but no concrete genre.
+  if (!genres.length) for (const v of vibes) for (const x of (VIBE_Q[v] || [])) push(x.q, x.e);
+  if (!queries.length) return; // no stated taste → keep the library pool as-is
+  try {
+    // Deep vibe pool (≈40/query) so it stays dominant over a long session instead of being
+    // exhausted by the recent-window and falling back to the listener's library.
+    const vibeTracks = await MyRadioSpotify.searchTracks(queries.slice(0, 6), 20);
+    if (vibeTracks.length) {
+      const lib = spotifyCtx?.topTracks || [];                 // energy-untagged → fallback only
+      const seen = new Set(vibeTracks.map((t) => t.uri));
+      spotifyMusic = vibeTracks.concat(lib.filter((t) => !seen.has(t.uri)));
+    }
+  } catch { /* keep whatever pool we had */ }
 }
 
 function persist() { try { localStorage.setItem("myradio_profile", JSON.stringify({ profile, LENGTHS, summaryPrefs })); } catch {} }
@@ -302,14 +346,26 @@ function withSpotify(items) {
     const recent = new Set(queue.slice(-RECENT).filter((it) => it.spotifyUri).map((it) => it.spotifyUri));
     const pool = shuffled(spotifyMusic);
     const assigned = new Set();
-    let fb = 0; // rotating index for the last-resort tier so it can't repeat one track
-    const pick = () =>
-      pool.find((t) => !played.has(t.uri) && !recent.has(t.uri) && !assigned.has(t.uri)) ||
-      pool.find((t) => !recent.has(t.uri) && !assigned.has(t.uri)) ||
-      pool.find((t) => !assigned.has(t.uri)) || pool[(fb++) % pool.length];
+    let fb = 0; // rotates among the closest-energy candidates for variety
+    // Pick a track for THIS music slot: keep the no-repeat tiers, then among eligible tracks
+    // choose the one whose energy best matches the slot's intended energy (so a "lo-fi" slot
+    // gets a chill track, a "workout" slot gets an upbeat one). Vibe-search tracks are
+    // energy-tagged; library tracks aren't, so they sit at a fixed distance and act as a
+    // fallback — restoring taste + context matching that the old random pick lost.
+    const pick = (target) => {
+      const t = (typeof target === "number") ? target : 0.5;
+      const dist = (x) => (typeof x.energy === "number") ? Math.abs(x.energy - t) : 0.5;
+      let cands = pool.filter((x) => !played.has(x.uri) && !recent.has(x.uri) && !assigned.has(x.uri));
+      if (!cands.length) cands = pool.filter((x) => !recent.has(x.uri) && !assigned.has(x.uri));
+      if (!cands.length) cands = pool.filter((x) => !assigned.has(x.uri));
+      if (!cands.length) cands = pool;
+      cands = cands.slice().sort((a, b) => dist(a) - dist(b));
+      const k = Math.min(5, cands.length);                       // rotate among the closest few
+      return cands[(fb++) % k];
+    };
     out = out.map((it) => {
       if (it.type !== "music") return it;
-      const t = pick(); assigned.add(t.uri);
+      const t = pick(it.energy); assigned.add(t.uri);
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
     });
   }

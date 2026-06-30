@@ -183,6 +183,30 @@
     return out;
   }
 
+  // Search the catalogue for tracks matching the listener's stated vibe/genre, so the music
+  // honours what they ASKED for (e.g. "upbeat electronic / lo-fi") even when it differs from
+  // their top tracks. Each query carries an `energy` (audio-features is deprecated for new
+  // apps, so we infer energy from the vibe term) — the player uses it to match context.
+  // Returns tracks tagged { uri, title, artist, energy }.
+  async function searchTracks(queries = [], perQuery = 20) {
+    const out = []; const seen = new Set();
+    const PAGE = 10;                      // Spotify search rejects limit > 10 ("Invalid limit"),
+    const reqs = [];                      // so page through with offset to build a deep pool.
+    queries.forEach((q, qi) => { for (let off = 0; off < perQuery; off += PAGE) reqs.push({ qi, off }); });
+    const results = await Promise.all(reqs.map((rq) =>
+      api(`/search?type=track&market=from_token&limit=${PAGE}&offset=${rq.off}&q=${encodeURIComponent(queries[rq.qi].q)}`).catch(() => null)
+    ));
+    results.forEach((r, idx) => {
+      const energy = queries[reqs[idx].qi]?.energy ?? 0.5;
+      for (const t of (r?.tracks?.items || [])) {
+        if (!t?.uri || !t.uri.startsWith("spotify:track:") || t.is_local || seen.has(t.uri)) continue;
+        seen.add(t.uri);
+        out.push({ uri: t.uri, title: t.name, artist: t.artists?.[0]?.name || "", energy });
+      }
+    });
+    return out;
+  }
+
   // Latest episode from the listener's saved Spotify shows (podcasts).
   async function getShows() {
     const saved = (await api("/me/shows?limit=10").catch(() => ({ items: [] }))).items.map((i) => i.show).filter(Boolean);
@@ -276,6 +300,6 @@
     onState: (cb) => { stateCb = cb; },
     isPremium: () => premium, isReady: () => ready, lastError: () => lastError,
     search: (q, type = "track") => api(`/search?type=${type}&limit=10&q=${encodeURIComponent(q)}`),
-    searchPodcasts,
+    searchPodcasts, searchTracks,
   };
 })();
