@@ -124,7 +124,7 @@ const TOPIC_WORDS = {
   climate: ["climate", "environment", "environmental", "sustainability", "carbon", "warming", "renewable", "emissions", "green energy"],
 };
 const VIBE_WORDS = { upbeat: ["upbeat", "energetic", "gym", "workout", "party", "hype", "fast", "dance"], focus: ["focus", "study", "work", "concentrate", "coding", "lofi", "lo-fi", "instrumental"], chill: ["chill", "calm", "relax", "evening", "sleep", "ambient", "mellow", "slow"] };
-const GENRE_WORDS = { electronic: ["electronic", "edm", "techno", "house", "dance"], pop: ["pop"], rock: ["rock", "indie", "metal", "punk", "alternative"], classical: ["classical", "orchestra", "piano"], jazz: ["jazz", "blues", "soul"], lofi: ["lofi", "lo-fi", "chillhop"], ambient: ["ambient", "atmospheric"] };
+const GENRE_WORDS = { electronic: ["electronic", "edm", "techno", "house", "dance"], hiphop: ["hip hop", "hip-hop", "hiphop", "rap", "trap", "drill"], rnb: ["r&b", "rnb", "rhythm and blues"], latin: ["latin", "reggaeton", "afrobeats", "amapiano"], pop: ["pop"], rock: ["rock", "indie", "metal", "punk", "alternative"], classical: ["classical", "orchestra", "piano"], jazz: ["jazz", "blues", "soul"], lofi: ["lofi", "lo-fi", "chillhop"], ambient: ["ambient", "atmospheric"] };
 const STOP = new Set("the a an and or of to in on for with about i my me you we like love want hear listen stuff things anything something also really very some more most when where how is are be that this it at as".split(" "));
 
 function matchCats(text, dict) {
@@ -227,6 +227,9 @@ async function refreshSpotifyPodcasts() {
 // energy so context matching still works. Vibes with no genre map to representative genres.
 const GENRE_Q = {
   electronic: [{ q: "electronic", e: 0.78 }, { q: "electro house", e: 0.85 }, { q: "house music", e: 0.80 }],
+  hiphop: [{ q: "hip hop", e: 0.70 }, { q: "rap hits", e: 0.72 }, { q: "trap", e: 0.75 }],
+  rnb: [{ q: "r&b hits", e: 0.55 }, { q: "rnb", e: 0.55 }],
+  latin: [{ q: "reggaeton", e: 0.80 }, { q: "latin hits", e: 0.78 }],
   pop:        [{ q: "pop hits", e: 0.70 }, { q: "dance pop", e: 0.78 }],
   rock:       [{ q: "rock anthems", e: 0.80 }, { q: "indie rock", e: 0.65 }],
   classical:  [{ q: "classical", e: 0.38 }, { q: "piano", e: 0.35 }],
@@ -255,6 +258,11 @@ async function refreshSpotifyMusic() {
     const vibeTracks = await MyRadioSpotify.searchTracks(queries.slice(0, 6), 20);
     if (vibeTracks.length) {
       const lib = spotifyCtx?.topTracks || [];                 // energy-untagged → fallback only
+      // Spotify blocks genre/audio-features for this app, so we can't classify the listener's
+      // OWN tracks by vibe. Next best thing: flag vibe-search hits whose artist is already in
+      // their library, so the picker leans toward artists they actually listen to.
+      const libArtists = new Set(lib.map((t) => (t.artist || "").toLowerCase().trim()).filter(Boolean));
+      vibeTracks.forEach((t) => { t.familiar = libArtists.has((t.artist || "").toLowerCase().trim()); });
       const seen = new Set(vibeTracks.map((t) => t.uri));
       spotifyMusic = vibeTracks.concat(lib.filter((t) => !seen.has(t.uri)));
     }
@@ -354,12 +362,14 @@ function withSpotify(items) {
     // fallback — restoring taste + context matching that the old random pick lost.
     const pick = (target) => {
       const t = (typeof target === "number") ? target : 0.5;
-      const dist = (x) => (typeof x.energy === "number") ? Math.abs(x.energy - t) : 0.5;
+      // Rank by energy distance, with a small bonus for tracks by artists already in the
+      // listener's library — so the vibe pool leans toward familiar artists where possible.
+      const score = (x) => ((typeof x.energy === "number") ? Math.abs(x.energy - t) : 0.5) - (x.familiar ? 0.06 : 0);
       let cands = pool.filter((x) => !played.has(x.uri) && !recent.has(x.uri) && !assigned.has(x.uri));
       if (!cands.length) cands = pool.filter((x) => !recent.has(x.uri) && !assigned.has(x.uri));
       if (!cands.length) cands = pool.filter((x) => !assigned.has(x.uri));
       if (!cands.length) cands = pool;
-      cands = cands.slice().sort((a, b) => dist(a) - dist(b));
+      cands = cands.slice().sort((a, b) => score(a) - score(b));
       const k = Math.min(5, cands.length);                       // rotate among the closest few
       return cands[(fb++) % k];
     };
