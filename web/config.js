@@ -21,6 +21,6 @@ window.MYRADIO_CONFIG = {
   SPOTIFY_REDIRECT_URI: "",
   SUPABASE_URL: "https://dxlmkclyqxrdmgpgtnxp.supabase.co",
   SUPABASE_ANON_KEY: "sb_publishable_Znvk5O3jCnWHJbXaD4-UDg_tg3mUOCM",  // publishable key — safe in the browser
-  // Deployed backend URL (leave blank for local dev → uses this host on :8787).
-  API_BASE: "",            // e.g. https://myradio-api.onrender.com
+  // Deployed backend URL (used when the site is served from anywhere except localhost).
+  API_BASE: "https://myradio-backend.onrender.com",
 };

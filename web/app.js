@@ -12,9 +12,11 @@ if (location.hostname === "localhost") {
   location.replace(location.href.replace("://localhost", "://127.0.0.1"));
 }
 
-// Backend base URL. In production set MYRADIO_CONFIG.API_BASE in config.js to your deployed
-// backend (e.g. https://myradio-api.onrender.com). Locally it defaults to :8787 on this host.
-const API = (window.MYRADIO_CONFIG && window.MYRADIO_CONFIG.API_BASE) || `http://${location.hostname || "127.0.0.1"}:8787`;
+// Backend base URL. On localhost we always use the local server on :8787 (so local dev keeps
+// working); anywhere else we use MYRADIO_CONFIG.API_BASE (the deployed Render backend).
+const LOCALHOST = location.hostname === "127.0.0.1" || location.hostname === "localhost";
+const API = (!LOCALHOST && window.MYRADIO_CONFIG && window.MYRADIO_CONFIG.API_BASE)
+  || `http://${location.hostname || "127.0.0.1"}:8787`;
 // Per-device identity: a stable UUID kept in localStorage, so this browser's profile,
 // learning, no-repeat news history and resume positions are its OWN — not shared across
 // everyone on a single "demo" account. (Replaced by the real account id once login lands.)
