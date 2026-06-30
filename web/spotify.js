@@ -4,11 +4,16 @@
 (function () {
   const CFG = window.MYRADIO_CONFIG || {};
   const CLIENT_ID = CFG.SPOTIFY_CLIENT_ID || "";
-  const REDIRECT = CFG.SPOTIFY_REDIRECT_URI || (location.origin + location.pathname);
+  // Auto-detect the redirect URI from wherever the app is served (location.origin) unless
+  // explicitly overridden in config. So the SAME build works on 127.0.0.1:8080 locally AND
+  // on https://pulsarla.com in production — just register BOTH origins in the Spotify
+  // dashboard. (Uses origin only — no path/trailing slash — to match the registered URIs.)
+  const REDIRECT = CFG.SPOTIFY_REDIRECT_URI || location.origin;
   const SCOPES = [
     "streaming", "user-read-email", "user-read-private",
     "user-read-playback-state", "user-modify-playback-state",
     "user-library-read", "playlist-read-private", "user-top-read",
+    "user-read-recently-played",
   ].join(" ");
   const AUTH = "https://accounts.spotify.com/authorize";
   const TOKEN = "https://accounts.spotify.com/api/token";
@@ -117,19 +122,65 @@
     };
   }
 
-  // Robust playable-track set — fresh accounts have no "top tracks", and some catalog
-  // endpoints are deprecated for new apps, so cascade: top -> saved -> artist top -> search.
+  // Build a DEEP, varied playable pool from everywhere the listener has music — not just
+  // their top 30. Sources: top tracks across all 3 time ranges, the entire saved/"liked"
+  // library (paginated), recently played, and the tracks inside their playlists. Deduped by
+  // URI *and* by song identity (title+artist) so the same song under different URIs (single
+  // vs album vs playlist copy) can't reappear — that was the "same song again and again" bug.
+  // Capped at MAX so a huge library stays bounded; fresh/empty accounts cascade to fallbacks.
+  const TRACK_CAP = 800;
   async function getTracks(artists = []) {
-    let t = (await api("/me/top/tracks?limit=30").catch(() => ({ items: [] }))).items;
-    if (t.length < 5) t = t.concat((await api("/me/tracks?limit=30").catch(() => ({ items: [] }))).items.map((i) => i.track).filter(Boolean));
-    if (t.length < 5) for (const a of artists.slice(0, 3)) {
-      if (!a.id) continue;
-      t = t.concat(((await api(`/artists/${a.id}/top-tracks?market=from_token`).catch(() => ({ tracks: [] }))).tracks) || []);
-      if (t.length >= 10) break;
+    const out = [];
+    const seenUri = new Set();
+    const seenSong = new Set();      // normalized title|artist — kills same-song-different-uri
+    const songKey = (x) => `${(x.name || "").toLowerCase().trim()}|${(x.artists?.[0]?.name || "").toLowerCase().trim()}`;
+    const add = (arr) => {
+      for (const x of arr) {
+        if (out.length >= TRACK_CAP) return;
+        // Only real, playable catalogue tracks (drop local files, podcast episodes, nulls).
+        if (!x || !x.uri || !x.uri.startsWith("spotify:track:") || x.is_local) continue;
+        const k = songKey(x);
+        if (seenUri.has(x.uri) || seenSong.has(k)) continue;
+        seenUri.add(x.uri); seenSong.add(k);
+        out.push({ uri: x.uri, title: x.name, artist: x.artists?.[0]?.name || "" });
+      }
+    };
+
+    // 1) Top tracks — all three time ranges (recent, 6-month, all-time), 50 each.
+    const ranges = ["short_term", "medium_term", "long_term"];
+    const tops = await Promise.all(ranges.map((r) =>
+      api(`/me/top/tracks?limit=50&time_range=${r}`).catch(() => ({ items: [] }))));
+    for (const t of tops) add(t.items || []);
+
+    // 2) Recently played (last 50 distinct).
+    add(((await api("/me/player/recently-played?limit=50").catch(() => ({ items: [] }))).items || []).map((i) => i.track).filter(Boolean));
+
+    // 3) Saved / "Liked Songs" — paginate the whole library (bounded by TRACK_CAP).
+    for (let off = 0; off < 1000 && out.length < TRACK_CAP; off += 50) {
+      const page = (await api(`/me/tracks?limit=50&offset=${off}`).catch(() => ({ items: [] }))).items || [];
+      add(page.map((i) => i.track).filter(Boolean));
+      if (page.length < 50) break;
     }
-    if (t.length < 5) t = t.concat(((await api("/search?type=track&limit=25&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
-    const seen = new Set();
-    return t.filter((x) => x && x.uri && !seen.has(x.uri) && seen.add(x.uri)).map((x) => ({ uri: x.uri, title: x.name, artist: x.artists?.[0]?.name || "" }));
+
+    // 4) Playlists — pull tracks from the listener's playlists for breadth/variety.
+    if (out.length < TRACK_CAP) {
+      const lists = ((await api("/me/playlists?limit=50").catch(() => ({ items: [] }))).items || []).filter((p) => p && p.id);
+      for (const pl of lists.slice(0, 25)) {
+        if (out.length >= TRACK_CAP) break;
+        const page = (await api(`/playlists/${pl.id}/tracks?limit=50&fields=${encodeURIComponent("items(track(uri,name,is_local,artists(name)))")}`).catch(() => ({ items: [] }))).items || [];
+        add(page.map((i) => i.track).filter(Boolean));
+      }
+    }
+
+    // Fallbacks for fresh/empty accounts (no listening history yet): artist top tracks, then search.
+    if (out.length < 5) for (const a of artists.slice(0, 3)) {
+      if (!a.id) continue;
+      add(((await api(`/artists/${a.id}/top-tracks?market=from_token`).catch(() => ({ tracks: [] }))).tracks) || []);
+      if (out.length >= 10) break;
+    }
+    if (out.length < 5) add(((await api("/search?type=track&limit=25&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
+
+    return out;
   }
 
   // Latest episode from the listener's saved Spotify shows (podcasts).
@@ -140,6 +191,27 @@
       try { const ep = (await api(`/shows/${sh.id}/episodes?limit=1&market=from_token`)).items?.[0]; if (ep) out.push({ uri: ep.uri, title: ep.name, show: sh.name }); } catch {}
     }
     return out;
+  }
+
+  // Search the Spotify catalogue for shows matching the listener's interests, then pull
+  // the latest episode from each. A far wider pool than saved shows alone — this is the
+  // Premium "so many more podcasts" path. Playback is still Web-SDK only (Premium), so
+  // callers gate on isPremium()/isReady().
+  async function searchPodcasts(terms = [], perTerm = 3) {
+    const uniq = [...new Set(terms.map((t) => String(t).trim().toLowerCase()).filter((t) => t.length > 2))].slice(0, 5);
+    if (!uniq.length) return [];
+    // Find candidate shows across the interest terms (deduped by show id).
+    const found = await Promise.all(uniq.map((q) =>
+      api(`/search?type=show&market=from_token&limit=${perTerm}&q=${encodeURIComponent(q)}`).catch(() => null)
+    ));
+    const shows = new Map();
+    for (const r of found) for (const sh of (r?.shows?.items || [])) if (sh?.id && !shows.has(sh.id)) shows.set(sh.id, sh);
+    // Pull the latest episode from each distinct show, in parallel.
+    const eps = await Promise.all([...shows.values()].slice(0, 12).map(async (sh) => {
+      try { const ep = (await api(`/shows/${sh.id}/episodes?limit=1&market=from_token`)).items?.[0]; return ep ? { uri: ep.uri, title: ep.name, show: sh.name } : null; }
+      catch { return null; }
+    }));
+    return eps.filter(Boolean);
   }
 
   // ---- Web Playback SDK (Premium full-track playback) ----
@@ -204,5 +276,6 @@
     onState: (cb) => { stateCb = cb; },
     isPremium: () => premium, isReady: () => ready, lastError: () => lastError,
     search: (q, type = "track") => api(`/search?type=${type}&limit=10&q=${encodeURIComponent(q)}`),
+    searchPodcasts,
   };
 })();

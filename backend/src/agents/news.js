@@ -9,6 +9,8 @@
 import { getText } from "../lib/http.js";
 import { parseRss, shortHash } from "../lib/rss.js";
 import { toSummary } from "../lib/summary.js";
+import { searchNews } from "../lib/newssearch.js";
+import { embeddingsAvailable, embed, cosine } from "../lib/embeddings.js";
 
 const FEEDS = [
   // ---- world ----
@@ -95,37 +97,131 @@ const AUDIO_NEWS = [
   { topic: "science", source: "Guardian · Science Weekly", url: "https://www.theguardian.com/science/series/science/podcast.xml" },
 ];
 
-const MAX_FEEDS = 10; // breadth cap per build, to bound latency
+const CURATED_CAP = 4;     // curated topic feeds per build — a backbone behind web search
+const MAX_SEARCHES = 5;    // distinct interest searches per build, to bound latency/quota
+const PER_SEARCH = 8;      // results pulled per interest search (deeper = more all-day inventory)
+// Recency windows, in days, widening as a long session runs: start on today's most
+// important stories, then reach back across the week once today's are exhausted.
+const SEARCH_WINDOWS = [1, 2, 7];
+
+const KNOWN_TOPICS = ["world", "technology", "ai", "business", "science", "space", "health", "sport", "culture", "entertainment", "gaming", "politics", "climate"];
+
+// The listener's free-text interests, split into discrete search phrases. Their raw
+// onboarding text is the best signal ("AI and startups, Arsenal FC, climate science"
+// → ["AI and startups", "Arsenal FC", "climate science"]); keywords and topics
+// backfill it. Returns ALL phrases (uncapped) so the agent can rotate through them.
+function interestQueries(profile) {
+  const out = [];
+  const text = (profile.interestsText || "").trim();
+  if (text) {
+    for (const part of text.split(/[,\n;/]|\band\b|\bplus\b|&/i)) {
+      const phrase = part.replace(/\s+/g, " ").trim();
+      if (phrase.length >= 3 && /[a-z0-9]/i.test(phrase)) out.push(phrase);
+    }
+  }
+  for (const k of profile.keywords || []) if (k && String(k).length > 2) out.push(String(k));
+  for (const t of profile.topics || []) out.push(String(t));
+  const seen = new Set(), uniq = [];
+  for (const q of out) { const key = q.toLowerCase(); if (!seen.has(key)) { seen.add(key); uniq.push(q); } }
+  return uniq;
+}
+
+// Best-guess topic label for a free-text query, so planner diversity + affinity
+// learning still work on scraped items.
+function topicForQuery(q) {
+  const ql = q.toLowerCase();
+  return KNOWN_TOPICS.find((t) => ql.includes(t)) || "news";
+}
 
 export async function newsAgent(profile = {}) {
   const topics = (profile.topics || []).map((t) => String(t).toLowerCase());
   const keywords = (profile.keywords || []).map((k) => String(k).toLowerCase()).filter((k) => k.length > 2);
 
-  // Pick every feed whose topic the listener expressed; if they said little,
-  // fall back to a general world + technology mix. Shuffle so the outlet mix
-  // varies between builds, then cap for latency.
-  let chosen = FEEDS.filter((f) => topics.includes(f.topic));
-  if (chosen.length < 3) chosen = chosen.concat(FEEDS.filter((f) => f.topic === "world" || f.topic === "technology"));
-  chosen = shuffle(dedupeFeeds(chosen)).slice(0, MAX_FEEDS);
+  // Each newsAgent call is a "round": the orchestrator re-invokes it to refill the
+  // pool as the listener works through the queue. Rotating the searched interests
+  // and widening the recency window per round keeps an all-day session pulling NEW
+  // stories (already-served ids are dropped upstream) instead of repeating.
+  const round = profile._newsRound = (profile._newsRound || 0) + 1;
+  const days = SEARCH_WINDOWS[(round - 1) % SEARCH_WINDOWS.length];
 
+  // 1) WEB SEARCH — the primary, personalized source: scan the whole web for recent
+  //    coverage of the listener's interests. Rotate the phrase window each round so
+  //    successive refills hit different interests.
+  const allQueries = interestQueries(profile);
+  let queries = allQueries;
+  if (allQueries.length > MAX_SEARCHES) {
+    const start = ((round - 1) * MAX_SEARCHES) % allQueries.length;
+    queries = [...allQueries.slice(start), ...allQueries.slice(0, start)].slice(0, MAX_SEARCHES);
+  }
+  const searchTasks = queries.map((q) => searchNews(q, { topic: topicForQuery(q), days, limit: PER_SEARCH }));
+
+  // 2) CURATED FEEDS — reputable topic feeds as a reliable backbone / fallback,
+  //    especially when the listener gave only a broad topic (or web search is blocked).
+  let chosen = FEEDS.filter((f) => topics.includes(f.topic));
+  if (chosen.length < 2 && !queries.length) chosen = chosen.concat(FEEDS.filter((f) => f.topic === "world" || f.topic === "technology"));
+  chosen = shuffle(dedupeFeeds(chosen)).slice(0, CURATED_CAP);
   const audioFeed = AUDIO_NEWS.find((a) => topics.includes(a.topic)) || AUDIO_NEWS[0];
 
+  // Curated feeds first so that when the SAME story appears in both a publisher feed
+  // and the web search, dedupe keeps the publisher version — the one with a fetchable
+  // article body that can be summarised to length (scraped Google-News links can't).
   const settled = await Promise.allSettled([
     ...chosen.map((f) => fetchFeed(f, 4)),
     fetchFeed(audioFeed, 1),
+    ...searchTasks,
   ]);
   let items = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
 
-  items = dedupeStories(items);
+  items = dedupeStories(items);                 // cheap title-prefix dedup first
+  items = await rankItems(items, profile, keywords);
+  return items.length ? items : seed();
+}
 
-  // Rank by relevance to the listener's stated interests (free-text keywords)
-  // plus a freshness nudge, so the most on-topic, recent stories surface first.
-  items = items
-    .map((it) => ({ ...it, _rel: relevance(it, keywords) }))
+// Rank candidates by relevance to the listener. With an embeddings key, rank by
+// SEMANTIC similarity (meaning, not keyword overlap) and drop near-duplicate stories
+// the title heuristic missed; with no key, fall back to the keyword + freshness score.
+// Either way, publisher-feed items get a nudge over web-scraped headlines, because only
+// they carry a fetchable article body (→ a real, full-length spoken summary).
+async function rankItems(items, profile, keywords) {
+  if (embeddingsAvailable() && items.length > 1) {
+    const semantic = await semanticRank(items, profile).catch(() => null);
+    if (semantic) return semantic;
+  }
+  return items
+    .map((it) => ({ ...it, _rel: relevance(it, keywords) + (it.scraped ? 0 : 1.5) }))
     .sort((a, b) => b._rel - a._rel)
     .map(({ _rel, ...it }) => it);
+}
 
-  return items.length ? items : seed();
+// Recency nudge: today's stories lead, tapering across the week.
+function freshness(it) {
+  if (!it.publishedAt) return 0;
+  const ageH = (Date.now() - it.publishedAt) / 3.6e6;
+  if (ageH < 0) return 0;
+  if (ageH < 24) return 1;
+  return ageH < 168 ? (168 - ageH) / 168 : 0;
+}
+
+async function semanticRank(items, profile) {
+  const query = [profile.interestsText || "", (profile.keywords || []).join(", "), (profile.topics || []).join(", ")]
+    .filter(Boolean).join(". ") || "general news";
+  const vecs = await embed([query, ...items.map((it) => `${it.title}. ${it.summary || ""}`)]);
+  if (!vecs) return null;                        // no key / API failure → caller uses heuristic
+  const qv = vecs[0];
+  const scored = items.map((it, i) => ({ it, v: vecs[i + 1], sim: cosine(qv, vecs[i + 1]) }))
+    .sort((a, b) => b.sim - a.sim);              // most query-relevant first (cluster anchors)
+
+  // Semantic dedup: skip a story too similar to one already kept (same event, reworded).
+  const kept = [];
+  for (const s of scored) {
+    if (kept.some((k) => cosine(k.v, s.v) > 0.9)) continue;
+    kept.push(s);
+  }
+  // Final order: semantic relevance, with smaller freshness + publisher nudges.
+  return kept
+    .map((s) => ({ s, score: s.sim + 0.1 * freshness(s.it) + (s.it.scraped ? 0 : 0.1) }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.s.it);
 }
 
 async function fetchFeed(feed, n) {
@@ -162,7 +258,10 @@ function relevance(it, keywords) {
   }
   if (it.publishedAt) {
     const ageH = (Date.now() - it.publishedAt) / 3.6e6;
-    if (ageH >= 0 && ageH < 48) score += (48 - ageH) / 48; // up to +1 for the freshest
+    if (ageH >= 0) {
+      if (ageH < 24) score += 2;                        // today: the day's most important lead
+      else if (ageH < 168) score += (168 - ageH) / 168; // this week: tapering bonus
+    }
   }
   return score;
 }

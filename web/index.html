@@ -20,6 +20,27 @@
   <div class="topbar">
     <h1>MyRadio<span class="ai">AI</span></h1>
     <span id="status" class="status">connecting…</span>
+    <!-- Account (shown only when accounts are configured in config.js) -->
+    <div id="account" class="account" hidden>
+      <span id="acct-email" class="acct-email"></span>
+      <button id="acct-signin" class="acct-btn">Log in</button>
+      <button id="acct-signout" class="acct-btn" hidden>Log out</button>
+    </div>
+  </div>
+
+  <!-- ===== Login (magic link) modal ===== -->
+  <div id="login" class="login-overlay" hidden>
+    <div class="login-card">
+      <h2>Log in to MyRadio</h2>
+      <p class="sub">Get your personalised station on any device. We'll email you a one-tap login link — no password.</p>
+      <label class="field">
+        <span>Your email</span>
+        <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" />
+      </label>
+      <button id="login-send" class="primary">Email me a login link →</button>
+      <p id="login-msg" class="login-msg"></p>
+      <button id="login-close" class="acct-btn">Maybe later</button>
+    </div>
   </div>
 
   <!-- ===== Onboarding interview (landing) ===== -->
@@ -98,7 +119,7 @@
         <div class="seg" data-type="news"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full article</button></div>
       </div>
       <div class="setrow"><span>🎙 Podcasts</span>
-        <div class="seg" data-type="podcast"><button data-v="summary">AI summary</button><button data-v="full" class="on">Full episode</button></div>
+        <div class="seg" data-type="podcast"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full episode</button></div>
       </div>
       <div class="setrow"><span>📖 Audiobooks</span>
         <div class="seg" data-type="audiobook"><button data-v="summary" class="on">AI summary</button><button data-v="full">Full text</button></div>
@@ -142,7 +163,6 @@
     </section>
 
     <section class="queue">
-      <h3>Up next</h3>
       <ul id="queue"></ul>
     </section>
 
@@ -150,9 +170,10 @@
     <audio id="bed" loop></audio>
   </main>
 
-  <script src="config.js?v=5"></script>
-  <script src="spotify.js?v=5"></script>
-  <script src="wispr.js?v=5"></script>
-  <script src="app.js?v=5"></script>
+  <script src="config.js?v=6"></script>
+  <script src="auth.js?v=6"></script>
+  <script src="spotify.js?v=6"></script>
+  <script src="wispr.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

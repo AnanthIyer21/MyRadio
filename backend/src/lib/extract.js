@@ -3,15 +3,46 @@
 import { decodeEntities } from "./entities.js";
 
 export function extractArticle(html, maxChars = 14000) {
-  let scope = html;
+  // 1) Paragraph extraction — scope to <article> when present, else the whole page.
   const art = html.match(/<article[\s\S]*?<\/article>/i);
-  if (art) scope = art[0];
+  const scope = art ? art[0] : html;
   const paras = [...scope.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
     .map((m) => clean(m[1]))
     .filter((t) => t.length > 40 && !/^(advertisement|sign up|subscribe|cookie|photograph|this article|read more)/i.test(t));
   let text = paras.join(" ");
-  if (text.length > maxChars) text = text.slice(0, maxChars);
-  return text;
+
+  // 2) Fallback: many sites (ESPN, agencies, JS-rendered pages) ship the full text
+  //    in a JSON-LD "articleBody" field even when the <p> markup is sparse. Use the
+  //    longest one found if it beats the paragraph extraction.
+  if (text.length < 600) {
+    const jsonld = jsonLdArticleBody(html);
+    if (jsonld.length > text.length) text = jsonld;
+  }
+  // 3) Last resort: the page's meta description (a sentence or two) so a stubborn
+  //    page still yields something to speak rather than nothing.
+  if (text.length < 120) {
+    const meta = metaDescription(html);
+    if (meta.length > text.length) text = meta;
+  }
+
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+// Pull "articleBody" out of JSON-LD blocks. The value is a JSON string, so unescape
+// the common sequences. Returns the longest body found (the main article).
+function jsonLdArticleBody(html) {
+  let best = "";
+  for (const m of html.matchAll(/"articleBody"\s*:\s*"((?:\\.|[^"\\])*)"/g)) {
+    const body = clean(m[1].replace(/\\n/g, " ").replace(/\\"/g, '"').replace(/\\\//g, "/").replace(/\\t/g, " "));
+    if (body.length > best.length) best = body;
+  }
+  return best;
+}
+
+function metaDescription(html) {
+  const m = html.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:name|property)=["'](?:description|og:description)["']/i);
+  return m ? clean(m[1]) : "";
 }
 
 export function cleanBookText(raw, maxChars = 24000) {

@@ -47,6 +47,9 @@ async function latestEpisode(show) {
     source: show.collectionName,
     url: ep.link,
     summary: toSummary(ep.description),
+    // Full episode show-notes for the summary agent (cleaned + capped at enrich time);
+    // summary stays the short blurb used for ranking and as the fallback.
+    content: ep.description || "",
     durationSec: 1800,
     energy: 0.5,
     audioUrl: ep.audioUrl,

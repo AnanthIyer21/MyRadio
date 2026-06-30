@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { detectContext } from "../src/context.js";
 import { scoreAndDiversify, scoreItem } from "../src/planner.js";
 import { musicAgent } from "../src/agents/music.js";
+import { targetWords, targetSeconds } from "../src/lib/llm.js";
+import { fetchItemContent } from "../src/lib/content.js";
 
 test("context agent detects morning commute on a weekday", () => {
   assert.equal(detectContext({ localHour: 8, dayOfWeek: 2 }).mode, "morning_commute");
@@ -27,6 +29,33 @@ test("explicit rewards lift an item's score", () => {
   const base = scoreItem(item, { rewards: {} }, ctx);
   const boosted = scoreItem(item, { rewards: { x1: 5 } }, ctx);
   assert.ok(boosted > base);
+});
+
+test("summary length scales with the listener's listening length", () => {
+  // A longer listening length must ask for proportionally more words.
+  const short = targetWords("news", { news: 45 });
+  const long = targetWords("podcast", { podcast: 300 });
+  assert.ok(long > short * 3, "5-min podcast budget should dwarf a 45s news budget");
+  // "Full" (0) and unset fall back to the per-type default, never zero.
+  assert.equal(targetSeconds("news", { news: 0 }), targetSeconds("news", {}));
+  assert.ok(targetWords("audiobook", {}) >= 20);
+  // Honour the longest slider (5 min) without the old 3-min clip.
+  assert.equal(targetSeconds("podcast", { podcast: 300 }), 300);
+});
+
+test("summary agent cleans podcast show-notes without a network fetch", async () => {
+  const text = await fetchItemContent({
+    type: "podcast",
+    content: "<p>Hosts debate <b>AI policy</b>.</p><![CDATA[ extra ]]>&nbsp;and more.",
+  });
+  assert.ok(!/[<>]/.test(text), "HTML tags stripped");
+  assert.match(text, /AI policy/);
+});
+
+test("summary agent yields no content (falls back to blurb) when none is fetchable", async () => {
+  assert.equal(await fetchItemContent({ type: "news" }), "");        // no url
+  assert.equal(await fetchItemContent({ type: "audiobook" }), "");   // no textUrl
+  assert.equal(await fetchItemContent({ type: "music" }), "");       // music never summarised
 });
 
 test("diversify returns a balanced cross-format queue", () => {

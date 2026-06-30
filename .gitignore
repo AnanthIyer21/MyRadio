@@ -6,7 +6,7 @@ node_modules/
 .env
 .env.local
 backend/.env
-backend/data/state.json
+backend/data/
 
 # Generated audio
 backend/generated-audio/
@@ -19,3 +19,7 @@ ios/**/DerivedData/
 
 # Monitor UX probe handoff (regenerated locally after each commit)
 monitor/HANDOFF.md
+
+# Local secrets
+.env
+backend/.env

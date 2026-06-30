@@ -38,7 +38,12 @@ function typeWeight(type, profile) {
 // gains its weight in "credit", the highest-credit type with items available is
 // played and pays 1 credit. Frequency converges to the weight distribution while
 // staying interleaved, and within each type the best-scoring item goes first.
-export function scoreAndDiversify(items, profile = {}, context = {}, n = 6) {
+// `credit` may be a persistent object (e.g. session-scoped) so the round-robin carries
+// over BETWEEN batches. This matters for small batches: with per-batch reset, the lowest-
+// weight type (audiobooks at ~15%) can never out-accumulate music/news/podcast within a
+// 3-item batch and is starved forever. Persisting credit lets it accumulate across batches
+// and surface at its intended frequency. Defaults to a fresh object (old behavior).
+export function scoreAndDiversify(items, profile = {}, context = {}, n = 6, credit = {}) {
   const scored = items
     .map((it) => ({ ...it, score: scoreItem(it, profile, context) }))
     .sort((a, b) => b.score - a.score);
@@ -48,8 +53,8 @@ export function scoreAndDiversify(items, profile = {}, context = {}, n = 6) {
 
   const types = Object.keys(byType);
   if (!types.length) return [];
-  const weight = {}, credit = {};
-  for (const t of types) { weight[t] = typeWeight(t, profile); credit[t] = 0; }
+  const weight = {};
+  for (const t of types) { weight[t] = typeWeight(t, profile); if (credit[t] == null) credit[t] = 0; }
 
   const queue = [];
   while (queue.length < n) {

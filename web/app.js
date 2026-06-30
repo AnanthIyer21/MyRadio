@@ -12,9 +12,28 @@ if (location.hostname === "localhost") {
   location.replace(location.href.replace("://localhost", "://127.0.0.1"));
 }
 
-// Talk to the backend on whatever host the page is served from (keeps a single origin).
-const API = `http://${location.hostname || "127.0.0.1"}:8787`;
-const USER = "demo";
+// Backend base URL. In production set MYRADIO_CONFIG.API_BASE in config.js to your deployed
+// backend (e.g. https://myradio-api.onrender.com). Locally it defaults to :8787 on this host.
+const API = (window.MYRADIO_CONFIG && window.MYRADIO_CONFIG.API_BASE) || `http://${location.hostname || "127.0.0.1"}:8787`;
+// Per-device identity: a stable UUID kept in localStorage, so this browser's profile,
+// learning, no-repeat news history and resume positions are its OWN — not shared across
+// everyone on a single "demo" account. (Replaced by the real account id once login lands.)
+const DEVICE_ID = (() => {
+  try {
+    let u = localStorage.getItem("myradio_uid");
+    if (!u) { u = (crypto?.randomUUID ? crypto.randomUUID() : "u-" + Date.now() + "-" + Math.random().toString(36).slice(2)); localStorage.setItem("myradio_uid", u); }
+    return u;
+  } catch { return "demo"; }
+})();
+// The id the app sends as `userId`. Defaults to the per-device id; once the listener logs in
+// it becomes their account id (set in initAuth), so their profile + feed follow them across
+// devices. authHeaders() attaches the login token so the backend can trust that account id.
+let USER = DEVICE_ID;
+const auth = window.MyRadioAuth || null;
+async function authHeaders(base = {}) {
+  if (auth && auth.configured()) { try { const t = await auth.token(); if (t) return { ...base, authorization: "Bearer " + t }; } catch {} }
+  return base;
+}
 const speechOK = "speechSynthesis" in window;
 const CPS = 15; // approx chars/sec of speech, for spoken progress + seeking
 
@@ -43,7 +62,11 @@ const history = [];
 let mode = "audio";          // 'audio' | 'speak' | 'spotify' | 'text'
 let current = null;          // resolved playback descriptor
 let loadToken = 0;
-const summaryPrefs = { news: "summary", podcast: "full", audiobook: "summary" };
+// Narration: spoken items are synthesized server-side to MP3 and played through the
+// <audio> element (mode "audio") with the ambient bed underneath. `narration` marks
+// that audio-mode playback as voice-over-bed so transport also controls the bed.
+let narration = false, lastBlobUrl = null;
+const summaryPrefs = { news: "summary", podcast: "summary", audiobook: "summary" };
 const LENGTHS = { news: 45, podcast: 300, audiobook: 120 };
 
 // Spotify
@@ -55,8 +78,9 @@ const shuffled = (arr) => arr.map((v) => [Math.random(), v]).sort((a, b) => a[0]
 let speakTimer = null, spPoll = null;
 let speakText = "", speakPos = 0;
 // Speech reliability state: retain the utterance (so it isn't GC'd mid-speech),
-// a keepalive against Chrome's ~15s auto-pause, and a watchdog for "never started".
-let speakUtter = null, speakKeepalive = null, speakWatchdog = null, speakStarted = false;
+// a keepalive against Chrome's ~15s auto-pause, and a poll loop that tracks actual
+// start/end via speechSynthesis.speaking (Chrome's onstart/onend events are unreliable).
+let speakUtter = null, speakKeepalive = null, speakPoll = null, speakStarted = false;
 let voicesReady = !speechOK || (speechSynthesis.getVoices && speechSynthesis.getVoices().length > 0);
 if (speechOK && !voicesReady) { try { speechSynthesis.onvoiceschanged = () => { voicesReady = true; }; } catch {} }
 // playback length cap: a non-"Full" length slider stops the item after N seconds.
@@ -171,12 +195,26 @@ $("ob-start").onclick = async () => {
     musicVibes: matchCats(music, VIBE_WORDS),
     genres: matchCats(music, GENRE_WORDS),
     contexts: contextsFrom(when || interests),
-    interestsText: interests, musicText: music,
+    interestsText: interests, musicText: music, whenText: when, // raw answers for the LLM onboarding agent
   };
   persist();
   try { localStorage.removeItem("myradio_draft"); } catch {}
+  await refreshSpotifyPodcasts();   // Premium: widen the podcast pool before the first batch
   startPlayer(await onboard());
 };
+
+// Premium only: grow the Spotify podcast pool from saved shows to a catalogue SEARCH
+// over the listener's interests, so connected Premium users get a far bigger, matched
+// selection. No-op when not Premium/ready — non-Premium keeps the iTunes/RSS podcasts.
+async function refreshSpotifyPodcasts() {
+  if (!spotifyReady() || !profile) return;
+  try {
+    const terms = [...(profile.topics || []), ...(profile.keywords || [])];
+    const found = await MyRadioSpotify.searchPodcasts(terms);
+    const seen = new Set(spotifyPodcasts.map((e) => e.uri));
+    spotifyPodcasts = spotifyPodcasts.concat(found.filter((e) => e?.uri && !seen.has(e.uri)));
+  } catch { /* keep saved-show pool (or none) — withSpotify falls back to RSS */ }
+}
 
 function persist() { try { localStorage.setItem("myradio_profile", JSON.stringify({ profile, LENGTHS, summaryPrefs })); } catch {} }
 
@@ -184,18 +222,9 @@ async function onboard() {
   if (live) {
     try {
       const r = await fetch(`${API}/api/onboarding`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: USER, ...profile, lengths: LENGTHS, spotify: spotifyCtx ? { genres: spotifyCtx.genres, topArtists: spotifyCtx.topArtists } : undefined, signals: signals() }),
+        method: "POST", headers: await authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ userId: USER, migrateFrom: DEVICE_ID, ...profile, lengths: LENGTHS, spotify: spotifyCtx ? { genres: spotifyCtx.genres, topArtists: spotifyCtx.topArtists } : undefined, signals: signals(), done: doneIds() }),
       });
-      if (r.ok) return r.json();
-    } catch {}
-  }
-  return localPlan();
-}
-async function getPlan() {
-  if (live) {
-    try {
-      const r = await fetch(`${API}/api/session-plan`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: USER, signals: signals() }) });
       if (r.ok) return r.json();
     } catch {}
   }
@@ -232,6 +261,7 @@ function initSettingsSliders() {
 function startPlayer(plan) {
   els.onboarding.hidden = true; els.player.hidden = false;
   initSettingsSliders();
+  startWatchdog();                                  // self-healing playback monitor
   applyPlan(plan); index = 0; history.length = 0; loadCurrent(true);
 }
 function applyPlan(plan) {
@@ -239,48 +269,97 @@ function applyPlan(plan) {
   els.explanation.textContent = plan.explanation || "";
   queue = withSpotify(plan.queue || []);
 }
+// Same-day play history for Spotify tracks (their identity is client-side, so the
+// "don't repeat a song the same day" rule for Spotify lives here, in localStorage).
+const SP_PLAYED_KEY = "myradio_spotify_played";
+function todayKey() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; }
+function playedSpotifyToday() {
+  try { const j = JSON.parse(localStorage.getItem(SP_PLAYED_KEY) || "{}"); return j.day === todayKey() ? new Set(j.uris || []) : new Set(); }
+  catch { return new Set(); }
+}
+function markSpotifyPlayed(uri) {
+  if (!uri) return;
+  const s = playedSpotifyToday(); s.add(uri);
+  try { localStorage.setItem(SP_PLAYED_KEY, JSON.stringify({ day: todayKey(), uris: [...s] })); } catch {}
+}
+
 // Premium: swap music + podcast items for the listener's own Spotify content.
 // Used for both the initial plan and every refill batch.
 function withSpotify(items) {
   let out = items;
+  // Tracks/episodes already committed to the queue (played or queued ahead) are excluded
+  // so a refill never re-assigns one still waiting to play; the `used` set also grows as
+  // we assign, preventing duplicates within a single batch.
   if (spotifyReady() && spotifyMusic.length) {
-    const pool = shuffled(spotifyMusic); let si = 0;       // shuffle so it's not the same songs each time
+    // Pick order: (1) not played today AND not in the recent queue window, (2) just not in
+    // the recent window (so once the small pool cycles, songs come back spread out — never
+    // within RECENT of each other), (3) anything not assigned in this batch. `assigned`
+    // guarantees no duplicate within a batch; the recent-window guarantees no near-repeat
+    // (fixes "same song 3× in a row" once the ~28-track pool is exhausted).
+    const RECENT = 18;
+    const played = playedSpotifyToday();
+    const recent = new Set(queue.slice(-RECENT).filter((it) => it.spotifyUri).map((it) => it.spotifyUri));
+    const pool = shuffled(spotifyMusic);
+    const assigned = new Set();
+    let fb = 0; // rotating index for the last-resort tier so it can't repeat one track
+    const pick = () =>
+      pool.find((t) => !played.has(t.uri) && !recent.has(t.uri) && !assigned.has(t.uri)) ||
+      pool.find((t) => !recent.has(t.uri) && !assigned.has(t.uri)) ||
+      pool.find((t) => !assigned.has(t.uri)) || pool[(fb++) % pool.length];
     out = out.map((it) => {
       if (it.type !== "music") return it;
-      const t = pool[si++ % pool.length];
+      const t = pick(); assigned.add(t.uri);
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
     });
   }
+  // Premium: swap podcasts to the listener's own Spotify shows. STABLE id from the episode
+  // uri so resume + never-repeat track the real episode; skip finished or already-queued ones.
   if (spotifyReady() && spotifyPodcasts.length) {
-    const pool = shuffled(spotifyPodcasts); let pi = 0;
+    const used = new Set(queue.filter((it) => it.spotifyUri).map((it) => it.spotifyUri));
+    const shuffledPool = shuffled(spotifyPodcasts);
+    const pick = () => shuffledPool.find((e) => !used.has(e.uri) && !getProg(spEpisodeId(e.uri)).done)
+      || shuffledPool.find((e) => !used.has(e.uri)) || shuffledPool[0];
     out = out.map((it) => {
       if (it.type !== "podcast") return it;
-      const e = pool[pi++ % pool.length];
-      return { ...it, spotifyUri: e.uri, title: e.title, subtitle: `${e.show} · Spotify`, source: "Spotify" };
+      const e = pick(); used.add(e.uri);
+      return { ...it, id: spEpisodeId(e.uri), spotifyUri: e.uri, title: e.title, subtitle: `${e.show} · Spotify`, source: "Spotify", rssAudioUrl: it.audioUrl };
     });
   }
   return out;
 }
+// Stable client id for a Spotify episode (so progress/no-repeat key on the real episode).
+const spEpisodeId = (uri) => "sp-" + String(uri).replace(/[^a-z0-9]/gi, "").slice(-24);
 
 // Continuous radio: when the queue nears its end, pull the next batch from the
 // backend and append it — so the station keeps producing as you skip / listen on.
-const REFILL_AHEAD = 2; // start fetching when this many items remain ahead
-let fetchingMore = false;
-async function ensureAhead() {
-  if (!live || fetchingMore) return;
-  if (index < queue.length - REFILL_AHEAD) return;   // still plenty queued
+// Keep at least QWINDOW items queued ahead (refill the moment fewer remain) so the
+// "Up next" group always fills to its 5, and request a batch big enough to restock
+// the whole window in one fetch.
+const REFILL_AHEAD = 6;          // fetch while this many (≥ QWINDOW) items remain ahead
+const REFILL_BATCH = 6;          // items to pull per refill — tops the window back up
+let fetchingMore = false, refillPromise = null;
+// Returns the in-flight refill promise so callers (advance) can await the append
+// before deciding the queue is exhausted — otherwise a fetch racing in the
+// background looks like an empty queue and triggers an unnecessary replan.
+function ensureAhead() {
+  if (!live) return Promise.resolve();
+  if (fetchingMore) return refillPromise || Promise.resolve();
+  if (index < queue.length - REFILL_AHEAD) return Promise.resolve(); // still plenty queued
   fetchingMore = true;
-  try {
-    const r = await fetch(`${API}/api/next`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: USER, signals: signals() }),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      const more = withSpotify(data.queue || []);
-      if (more.length) { queue = queue.concat(more); renderQueue(); }
-    }
-  } catch {} finally { fetchingMore = false; }
+  refillPromise = (async () => {
+    try {
+      const r = await fetch(`${API}/api/next`, {
+        method: "POST", headers: await authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ userId: USER, n: REFILL_BATCH, signals: signals(), done: doneIds() }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const more = withSpotify(data.queue || []);
+        if (more.length) { queue = queue.concat(more); renderQueue(); prewarmAhead(); }
+      }
+    } catch {} finally { fetchingMore = false; }
+  })();
+  return refillPromise;
 }
 
 // ---- content resolution (may fetch full text) ----
@@ -293,28 +372,121 @@ async function fetchText(endpoint, url) {
 }
 // Prefer the producer's context-aware spoken segue; fall back to a static intro.
 const lead = (it) => (it.segue ? it.segue.trim() + " " : it.type === "news" ? `Here's the latest from ${it.source}. ` : it.type === "podcast" ? `From ${it.source}. ` : it.type === "audiobook" ? `From ${it.title}. ` : "");
+
+// Measured speaking rate of the AI voice (Google TTS ≈ 2.28 words/sec across
+// realistic multi-chunk prose), used to trim source text to roughly the listener's
+// chosen number of seconds.
+const WPS = 2.28;
 function condense(text, seconds) {
-  if (!seconds) return text;                              // 0 = "full"
-  const target = Math.round(seconds * 2.6), out = []; let w = 0;
-  for (const s of String(text).split(/(?<=[.!?])\s+/)) { out.push(s); w += s.split(/\s+/).length; if (w >= target) break; }
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!seconds || !clean) return clean;                 // 0 = "full"
+  const target = Math.max(20, Math.round(seconds * WPS));
+  const out = []; let w = 0;
+  for (const s of clean.split(/(?<=[.!?])\s+/)) { out.push(s); w += s.split(/\s+/).length; if (w >= target) break; }
   return out.join(" ");
 }
 
+// ---------- serial playback (podcasts + audiobooks) ----------
+// Podcasts and audiobooks aren't summarised — the REAL content plays in segments of
+// the chosen length, and we resume from where we stopped next time the same one comes
+// up ("finish one then next"). Position is remembered per item in localStorage:
+//   podcast   → seconds into the episode audio
+//   audiobook → { chapter, pos } : which chapter MP3 + seconds into it
+const PROGRESS_KEY = "myradio_progress";
+let progress = {};
+try { progress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}") || {}; } catch {}
+const getProg = (id) => progress[id] || {};
+function setProg(id, fields) {
+  progress[id] = { ...(progress[id] || {}), ...fields };
+  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress)); } catch {}
+}
+// Ids of serial items the listener has finished — sent to the backend so it stops
+// serving them and moves on to the next episode/book.
+const doneIds = () => Object.keys(progress).filter((id) => progress[id] && progress[id].done);
+
+// The segment currently playing (so transport/advance can save the resume position).
+let segState = null;
+// Set when the listener explicitly SKIPS the current item (Skip/Less buttons). A skipped
+// podcast/audiobook is abandoned — marked done so its remainder never returns and the next
+// episode/book takes over. A segment that simply reaches its length cap is NOT a skip.
+let skipCurrent = false;
+
+// Persist the resume position for the serial segment that's ending/being left. Both
+// podcasts and audiobooks are real audio; the difference is audiobooks span multiple
+// chapter MP3s, so finishing a chapter advances to the next one.
+function saveSegmentProgress() {
+  const s = segState; if (!s) return;
+  // Explicit skip of a serial → abandon it: mark done so it's never resumed or re-served.
+  if (skipCurrent && (s.type === "podcast" || s.type === "audiobook")) { setProg(s.id, { done: true }); return; }
+  // Spotify podcast: position/duration come from the SDK poll (ms), not the <audio> element.
+  if (s.spotify) {
+    const cur = lastSpPos / 1000, dur = lastSpDur / 1000;
+    if (cur - (s.startSec || 0) < 1) return;          // never really played — keep prior spot
+    setProg(s.id, { pos: cur, done: dur > 0 && cur >= dur - 3 }); // done when the episode ends
+    return;
+  }
+  const a = els.audio, dur = a.duration || 0, cur = a.currentTime || 0;
+  if (!dur || cur - (s.startSec || 0) < 1) return;   // never really played — keep prior spot
+  if (s.type === "podcast") {
+    setProg(s.id, { pos: cur, done: cur >= dur - 1.5 });        // done when the episode ends
+  } else if (s.type === "audiobook") {
+    if (cur >= dur - 1.5) {                                     // this chapter finished
+      const last = s.chapter >= s.chapters - 1;
+      setProg(s.id, last ? { done: true } : { chapter: s.chapter + 1, pos: 0, done: false });
+    } else {
+      setProg(s.id, { chapter: s.chapter, pos: cur, done: false });
+    }
+  }
+}
+
+// Build the spoken AI-summary text at roughly the chosen length. If the backend
+// already summarised this item to length (LLM producer set `summarized`), speak
+// that verbatim; otherwise fetch the fullest source available (whole article /
+// whole book text) and trim it to the target — so summaries actually fill the time
+// instead of playing a one-line blurb. `srcFetcher` is null when no fuller source
+// exists (e.g. scraped Google-News headlines, podcast blurbs).
+async function summaryText(item, srcFetcher) {
+  if (item.summarized && item.summary) return item.summary;   // backend LLM summary, already at length
+  let src = item.content || "";                               // backend-enriched full body (article/book/notes)
+  if (!src && srcFetcher) src = await srcFetcher();            // fall back to fetching it ourselves
+  if (!src) src = item.summary || item.title;                 // last resort: blurb / headline
+  return condense(src, LENGTHS[item.type]);
+}
+
 async function resolveContent(item) {
-  if (item.spotifyUri && spotifyReady()) return { kind: "spotify", uri: item.spotifyUri, isFull: true };
-  if (item.type === "music") return { kind: "audio", audioUrl: item.audioUrl, isFull: false };
+  if (item.type === "music") {
+    // Music: full Spotify track when Premium, else royalty-free audio.
+    if (item.spotifyUri && spotifyReady()) return { kind: "spotify", uri: item.spotifyUri, isFull: true };
+    return { kind: "audio", audioUrl: item.audioUrl, isFull: false };
+  }
   const pref = summaryPrefs[item.type] || "summary";
+
   if (item.type === "podcast") {
-    if (pref === "full" && item.audioUrl) return { kind: "audio", audioUrl: item.audioUrl, isFull: true };
-    return { kind: "speak", text: lead(item) + condense(item.summary || item.title, LENGTHS.podcast), isFull: false };
+    // SERIAL: real episode in length-segments, resuming where we left off. Premium →
+    // play the Spotify episode via the SDK; otherwise the RSS episode audio.
+    const p = getProg(item.id);
+    if (item.spotifyUri && spotifyReady())
+      return { kind: "spotify", serial: "podcast", id: item.id, uri: item.spotifyUri, startSec: p.pos || 0, segLen: LENGTHS.podcast };
+    return { kind: "audio", serial: "podcast", id: item.id, audioUrl: item.audioUrl, startSec: p.pos || 0, segLen: LENGTHS.podcast };
   }
   if (item.type === "news") {
-    let body = await fetchText("api/article", item.url); if (!body) body = item.summary || item.title;
-    return { kind: "speak", text: lead(item) + (pref === "full" ? body : condense(body, LENGTHS.news)), isFull: pref === "full" };
+    // Scraped (Google News) links are redirect URLs that don't yield article text,
+    // so there's no fuller source to fetch for those — summary stays headline-length.
+    const fetchArticle = item.scraped ? null : () => fetchText("api/article", item.url);
+    if (pref === "full" && fetchArticle) {
+      const body = await fetchArticle();
+      if (body) return { kind: "speak", text: lead(item) + body, isFull: true };
+    }
+    return { kind: "speak", text: lead(item) + await summaryText(item, fetchArticle), isFull: false };
   }
   if (item.type === "audiobook") {
-    let t = await fetchText("api/booktext", item.textUrl); if (!t) t = item.summary || item.title;
-    return { kind: "speak", text: lead(item) + (pref === "full" ? t : condense(t, LENGTHS.audiobook)), isFull: pref === "full" };
+    // SERIAL: real human narration (LibriVox chapter MP3s) played in length-segments,
+    // resuming by chapter + position. Each chapter is one audio file.
+    const sections = item.sections || [];
+    if (!sections.length) return { kind: "text" };
+    const p = getProg(item.id);
+    const chapter = Math.min(p.chapter || 0, sections.length - 1);
+    return { kind: "audio", serial: "audiobook", id: item.id, audioUrl: sections[chapter].url, startSec: p.pos || 0, segLen: LENGTHS.audiobook, chapter, chapters: sections.length };
   }
   return { kind: "text" };
 }
@@ -334,9 +506,11 @@ async function loadCurrent(autoplay = false) {
   const d = await resolveContent(item);
   if (my !== loadToken) return;                 // user already moved on
   current = d; mode = d.kind;
+  prewarmAhead();                               // synthesize upcoming news TTS in the background
 
-  // Length cap: any non-"Full" length means "stop this item after N seconds".
-  playCap = item.type !== "music" && LENGTHS[item.type] ? LENGTHS[item.type] : 0;
+  // Serials manage their own segment length (segState); summaries are pre-trimmed and
+  // end naturally — so the old blunt "stop after N seconds" cap is no longer needed.
+  playCap = 0;
   capped = false;
 
   els.npProgress.classList.toggle("disabled", false);
@@ -350,20 +524,116 @@ async function loadCurrent(autoplay = false) {
 }
 function noteFor(item, d) {
   if (item.type === "music") return d.kind === "spotify" ? "▶ Spotify" : "";
-  return d.isFull ? (d.kind === "audio" ? "▶ Full episode" : "📖 Reading the full text") : "🔊 AI summary (spoken)";
+  if (d.serial === "podcast") return "🎙 Podcast — playing in segments";
+  if (d.serial === "audiobook") return "📖 Audiobook — narrated, in segments";
+  return d.isFull ? "📖 Reading the full text" : "🔊 AI summary (spoken)";
+}
+
+// ---- runtime playback watchdog (self-healing "agent") ----
+// A background loop that checks playback is actually happening when it should be, and
+// recovers without the listener having to notice. Targets the <audio> element path
+// (music / narration / podcast / audiobook); Spotify has its own poll. `playIntent` =
+// "we want sound right now" (false while paused/stopped/loading), so it never fights
+// the user or misfires during a track load.
+let playIntent = false, watchTimer = null, stallTicks = 0;
+function setPlayIntent(on) { playIntent = on; stallTicks = 0; }
+function startWatchdog() {
+  clearInterval(watchTimer);
+  watchTimer = setInterval(() => {
+    if (!playIntent || document.hidden || mode !== "audio") { stallTicks = 0; return; }
+    if (!els.audio.getAttribute("src")) { stallTicks = 0; return; } // still loading/preparing
+    // It should be playing, but the element is paused → the track stalled or failed.
+    if (els.audio.paused) {
+      stallTicks++;
+      if (stallTicks === 2) { els.audio.play().catch(() => {}); if (narration) startBed(); } // nudge
+      else if (stallTicks >= 5) { stallTicks = 0; console.warn("[watchdog] playback stuck — skipping"); autoAdvance(); }
+    } else stallTicks = 0;
+  }, 2000);
 }
 
 function startPlayback(d) {
-  if (d.kind === "audio") { els.audio.src = d.audioUrl; playAudio(); stopBed(); }
-  else if (d.kind === "speak") { startSpeakFrom(d.text, 0); }  // bed starts only when speech actually begins
-  else if (d.kind === "spotify") { startSpotify(d.uri); stopBed(); }
+  setPlayIntent(true);
+  if (d.kind === "audio") {
+    narration = false; stopBed();
+    if (d.serial === "podcast" || d.serial === "audiobook") {
+      // Real audio (episode / narrated chapter): resume at the saved second, play one segment.
+      segState = { id: d.id, type: d.serial, startSec: d.startSec || 0, segLen: d.segLen, chapter: d.chapter || 0, chapters: d.chapters || 1 };
+      const seekThenPlay = () => { try { els.audio.currentTime = Math.min(d.startSec || 0, (els.audio.duration || d.startSec || 0)); } catch {} els.audio.removeEventListener("loadedmetadata", seekThenPlay); };
+      els.audio.addEventListener("loadedmetadata", seekThenPlay);
+      els.audio.src = d.audioUrl; playAudio();
+    } else { els.audio.src = d.audioUrl; playAudio(); }      // music
+  } else if (d.kind === "speak") {
+    startNarration(d.text, { bed: true });                  // news AI summary, bed underneath
+  } else if (d.kind === "spotify") {
+    narration = false; stopBed();
+    if (d.serial === "podcast") {
+      // Spotify podcast, played serially via the SDK (resume + segment cap).
+      segState = { id: d.id, type: "podcast", startSec: d.startSec || 0, segLen: d.segLen, chapters: 1, chapter: 0, spotify: true };
+      startSpotify(d.uri, d.startSec || 0, d.segLen);
+    } else { startSpotify(d.uri); }                         // full music track
+  }
   event("play");
 }
+
+// Synthesize the spoken text to MP3 on the backend and play it through the <audio>
+// element (reliable), with the ambient bed underneath. Falls back to the browser
+// voice if the server TTS is unavailable (offline / endpoint down).
+async function narrate(text) {
+  if (!live) return null;
+  try {
+    const r = await fetch(`${API}/api/tts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    return blob.size ? URL.createObjectURL(blob) : null;
+  } catch { return null; }
+}
+// TTS prewarm cache: spoken text -> Promise<objUrl|null>. Synthesizing upcoming news in the
+// background (see prewarmAhead) while the current item plays means the MP3 is usually ready
+// the instant we arrive, so playback starts immediately instead of waiting on a round-trip.
+const ttsCache = new Map();
+function ttsFor(text) {
+  const key = text || "";
+  if (!key) return Promise.resolve(null);
+  if (ttsCache.has(key)) return ttsCache.get(key);
+  const p = narrate(key);
+  ttsCache.set(key, p);
+  if (ttsCache.size > 12) ttsCache.delete(ttsCache.keys().next().value); // bound the cache
+  return p;
+}
+// Pre-synthesize TTS for the next few spoken (news) items so they're ready before we reach
+// them. Fire-and-forget; resolveContent here is the same work play does, just done earlier.
+function prewarmAhead() {
+  let warmed = 0;
+  for (let i = index + 1; i < queue.length && warmed < 3; i++) {
+    const it = queue[i];
+    if (!it || it.type !== "news") continue;          // only spoken items need TTS
+    warmed++;
+    resolveContent(it).then((d) => { if (d && d.kind === "speak" && d.text) ttsFor(d.text); }).catch(() => {});
+  }
+}
+async function startNarration(text, { bed = true } = {}) {
+  const my = loadToken;
+  els.npNote.textContent = "🔊 Preparing audio…";
+  const objUrl = await ttsFor(text);
+  if (my !== loadToken) { if (objUrl) URL.revokeObjectURL(objUrl); return; } // moved on while synthesizing
+  if (objUrl) {
+    narration = bed; mode = "audio";                   // `narration` = "bed rides with the voice"
+    if (lastBlobUrl) { try { URL.revokeObjectURL(lastBlobUrl); } catch {} }
+    lastBlobUrl = objUrl;
+    els.npNote.textContent = current?.serial === "audiobook" ? "📖 Audiobook — read aloud in segments" : "🔊 AI summary (spoken)";
+    els.audio.src = objUrl; if (bed) startBed(); playAudio();
+  } else {
+    narration = false; mode = "speak";                 // last-resort fallback: browser voice
+    startSpeakFrom(text, 0);
+  }
+}
 function stopPlayback() {
+  setPlayIntent(false);
+  saveSegmentProgress(); segState = null; skipCurrent = false;   // persist/abandon, then clear the skip flag
   els.audio.pause(); els.audio.removeAttribute("src");
   if (speechOK) speechSynthesis.cancel();
   clearInterval(speakTimer); speakTimer = null;
-  stopKeepalive(); clearTimeout(speakWatchdog); speakWatchdog = null; speakUtter = null;
+  stopKeepalive(); clearInterval(speakPoll); speakPoll = null; speakUtter = null;
   clearInterval(spPoll); spPoll = null;
   if (window.MyRadioSpotify && MyRadioSpotify.isReady()) MyRadioSpotify.pause();
   stopBed();
@@ -374,21 +644,60 @@ function stopPlayback() {
 function playAudio() { els.audio.play().then(() => setToggle(true)).catch(() => setToggle(false)); }
 els.audio.ontimeupdate = () => {
   const dur = els.audio.duration; if (!dur) return;
-  if (playCap && els.audio.currentTime >= playCap && !capped) { capped = true; event("complete"); advance(); return; }
-  const eff = playCap ? Math.min(dur, playCap) : dur;
-  els.npBar.style.width = Math.min(100, els.audio.currentTime / eff * 100) + "%";
-  els.npCur.textContent = fmt(els.audio.currentTime); els.npRem.textContent = "-" + fmt(Math.max(0, eff - els.audio.currentTime));
+  // Podcast segment: progress + cap are measured RELATIVE to where this segment began,
+  // so a 5-min segment is 5 min of listening wherever in the episode it resumed.
+  if (segState && (segState.type === "podcast" || segState.type === "audiobook")) {
+    const played = els.audio.currentTime - segState.startSec;
+    const total = segState.segLen;
+    if (total && played >= total && !capped) { capped = true; els.audio.pause(); event("complete"); autoAdvance(); return; }
+    els.npBar.style.width = Math.min(100, played / total * 100) + "%";
+    els.npCur.textContent = fmt(Math.max(0, played)); els.npRem.textContent = "-" + fmt(Math.max(0, total - played));
+    return;
+  }
+  els.npBar.style.width = Math.min(100, els.audio.currentTime / dur * 100) + "%";
+  els.npCur.textContent = fmt(els.audio.currentTime); els.npRem.textContent = "-" + fmt(Math.max(0, dur - els.audio.currentTime));
 };
-els.audio.onended = () => { event("complete"); advance(); };
+els.audio.onended = () => { event("complete"); autoAdvance(); };
+// If a real-audio item fails to load/play (bad or region-locked chapter URL, network
+// error), don't sit silent — move on immediately instead of waiting for the watchdog.
+// Guarded so the src-removal during stopPlayback() doesn't count as a real failure.
+els.audio.onerror = () => {
+  if (!els.audio.getAttribute("src") || !playIntent) return;   // teardown / not the current item
+  console.warn("[audio] could not play this item — skipping:", els.audio.error?.code);
+  autoAdvance();
+};
 
 // ---- speak (summary / full read-aloud) with char-based seek ----
-// Speech is the source of truth: the ambient bed + progress bar start on onstart,
-// and an error/watchdog path surfaces "unavailable" instead of leaving bed-only
-// silence (the classic Chrome speechSynthesis failure mode).
+// Chrome's SpeechSynthesis onstart/onend events are unreliable — they often never
+// fire even while speech is actually playing (speechSynthesis.speaking === true).
+// So we POLL speechSynthesis.speaking as the source of truth: it tells us when the
+// voice really starts and when it finishes, and the events just accelerate that.
+const isSpeaking = () => { try { return speechSynthesis.speaking; } catch { return false; } };
+const isPausedTTS = () => { try { return speechSynthesis.paused; } catch { return false; } };
+
+// The voice actually began: kick off the ambient bed, progress, and keepalive once.
+function markSpeakStarted() {
+  if (speakStarted) return;
+  speakStarted = true;
+  startBed(); startSpeakTimer(); startKeepalive(); setToggle(true);
+}
+// Natural end of the utterance → log completion and move to the next item.
+function finishSpeak() {
+  stopSpeakTimer(); stopKeepalive();
+  event("complete"); autoAdvance();
+}
+// Genuinely couldn't speak (no voice ever started) — surface it and skip on.
+function speakUnavailable() {
+  stopSpeakTimer(); stopKeepalive(); stopBed();
+  els.npNote.textContent = "🔇 Spoken summary unavailable — skipping.";
+  setToggle(false);
+  if (mode === "speak") setTimeout(() => autoAdvance(), 700);
+}
+
 function startSpeakFrom(text, posChars, isRetry = false) {
   speakText = text; speakPos = Math.max(0, Math.min(posChars, text.length));
   if (!speechOK) { startSpeakTimer(); startBed(); setToggle(true); return; } // no TTS: timer-driven progress
-  clearTimeout(speakWatchdog); speakWatchdog = null;
+  clearInterval(speakPoll); speakPoll = null;
   stopKeepalive();
   speakUtter = null;          // supersede any prior utterance: its callbacks now no-op
   speechSynthesis.cancel();   // (cancel can fire the old utterance's onend/onerror)
@@ -398,31 +707,41 @@ function startSpeakFrom(text, posChars, isRetry = false) {
     const u = new SpeechSynthesisUtterance(speakText.slice(speakPos));
     u.rate = 1.03;
     speakUtter = u; // retain the reference so the utterance isn't GC'd mid-speech
-    // Every handler bails if its utterance is no longer the current one — so a
-    // cancel()-induced error from a superseded utterance can't retry or advance.
-    u.onstart = () => {
+    // Events are opportunistic accelerators; the poll loop below is authoritative.
+    // Each handler bails if its utterance is no longer the current one.
+    u.onstart = () => { if (speakUtter === u) markSpeakStarted(); };
+    u.onend = () => { if (speakUtter === u && speakStarted && mode === "speak") { clearInterval(speakPoll); speakPoll = null; finishSpeak(); } };
+    u.onerror = (e) => {
       if (speakUtter !== u) return;
-      speakStarted = true;
-      clearTimeout(speakWatchdog); speakWatchdog = null;
-      startBed(); startSpeakTimer(); startKeepalive(); setToggle(true);
-    };
-    u.onend = () => { if (speakUtter === u && mode === "speak") { stopSpeakTimer(); stopKeepalive(); event("complete"); advance(); } };
-    u.onerror = () => {
-      if (speakUtter !== u) return;
+      // cancel()/supersede fire 'interrupted'/'canceled' — those aren't real failures.
+      if (e && (e.error === "interrupted" || e.error === "canceled")) return;
       if (!speakStarted && !isRetry) { startSpeakFrom(speakText, speakPos, true); return; } // one retry
-      stopSpeakTimer(); stopKeepalive(); stopBed();
-      els.npNote.textContent = "🔇 Spoken summary unavailable — skipping.";
-      setToggle(false);
-      if (mode === "speak") setTimeout(() => advance(), 700);
+      clearInterval(speakPoll); speakPoll = null; speakUnavailable();
     };
     speechSynthesis.speak(u);
-    // Watchdog: if speech never actually starts (onstart never fires), retry once,
-    // then give up gracefully rather than play the bed with no voice.
-    speakWatchdog = setTimeout(() => {
-      if (speakUtter !== u || speakStarted) return;
-      if (!isRetry) { startSpeakFrom(speakText, speakPos, true); }
-      else { stopBed(); stopSpeakTimer(); els.npNote.textContent = "🔇 Spoken summary unavailable — skipping."; setToggle(false); if (mode === "speak") advance(); }
-    }, 1800);
+
+    // Authoritative poll: detect real start (speaking flips true even when onstart
+    // never fires) and real end (speaking goes quiet after we'd started). If the
+    // voice never starts within the grace window, retry once, then give up.
+    let waited = 0;
+    const STEP = 200, GRACE = 3000;
+    clearInterval(speakPoll);
+    speakPoll = setInterval(() => {
+      if (speakUtter !== u) { clearInterval(speakPoll); speakPoll = null; return; }
+      if (!speakStarted) {
+        if (isSpeaking()) { markSpeakStarted(); return; }
+        waited += STEP;
+        if (waited >= GRACE) {
+          clearInterval(speakPoll); speakPoll = null;
+          if (!isRetry) startSpeakFrom(speakText, speakPos, true);
+          else speakUnavailable();
+        }
+      } else if (!isSpeaking() && !isPausedTTS()) {
+        // Started and now silent (and not just paused) → the utterance finished.
+        clearInterval(speakPoll); speakPoll = null;
+        if (mode === "speak") finishSpeak();
+      }
+    }, STEP);
   };
 
   // Defer a tick so cancel() settles before speak() (avoids the 'canceled' race),
@@ -446,7 +765,7 @@ function startSpeakTimer() {
   speakTimer = setInterval(() => {
     speakPos = Math.min(speakText.length, speakPos + CPS * 0.25);
     const elapsed = speakPos / CPS;
-    if (playCap && elapsed >= playCap && !capped) { capped = true; stopSpeakTimer(); event("complete"); advance(); return; }
+    if (playCap && elapsed >= playCap && !capped) { capped = true; stopSpeakTimer(); event("complete"); autoAdvance(); return; }
     const total = playCap ? Math.min(speakText.length / CPS, playCap) : speakText.length / CPS;
     els.npBar.style.width = Math.min(100, elapsed / total * 100) + "%";
     els.npCur.textContent = fmt(elapsed);
@@ -457,25 +776,47 @@ function stopSpeakTimer() { clearInterval(speakTimer); speakTimer = null; }
 function speakSeek(deltaSec) { startSpeakFrom(speakText, Math.floor(speakPos + deltaSec * CPS)); }
 
 // ---- spotify mode ----
-async function startSpotify(uri) {
+// segStart/segLen (seconds, both 0 for full music tracks): for a serial Spotify PODCAST
+// we resume at segStart and stop after segLen of listening, saving the position.
+async function startSpotify(uri, segStart = 0, segLen = 0) {
+  clearInterval(spPoll); spPoll = null;
+  lastSpPos = segStart * 1000; lastSpDur = 0; // reset per-track state — stale values were
+                                              // triggering a false "track ended" right after a skip
+  const my = loadToken;                       // this poll belongs only to the current track
+  let started = false, seeked = segStart <= 0; // don't detect "ended" until it really plays
+  markSpotifyPlayed(uri);                      // record for the same-day no-repeat rule
   const ok = await MyRadioSpotify.play(uri); setToggle(ok);
-  clearInterval(spPoll);
   spPoll = setInterval(async () => {
+    if (my !== loadToken) { clearInterval(spPoll); return; }   // a skip/next superseded us → stop
     const s = await MyRadioSpotify.getState(); if (!s) return;
-    if (playCap && s.position / 1000 >= playCap && !capped) { capped = true; advance(); return; }
-    const eff = playCap ? Math.min(s.duration, playCap * 1000) : s.duration;
+    if (!seeked && !s.paused) { try { await MyRadioSpotify.seek(segStart * 1000); } catch {} seeked = true; lastSpPos = segStart * 1000; return; } // resume position
+    if (!s.paused && s.position > 250) started = true;          // freshly-skipped track is now playing
+    const prevPos = lastSpPos;
+    lastSpPos = s.position;
+    // Segment cap (podcast): stop after segLen of listening from where we resumed.
+    if (segLen && (s.position / 1000 - segStart) >= segLen) { saveSegmentProgress(); autoAdvance(); return; }
+    if (playCap && s.position / 1000 >= playCap && !capped) { capped = true; autoAdvance(); return; }
+    const eff = s.duration || 1;
     lastSpDur = eff;
-    els.npBar.style.width = Math.min(100, s.position / eff * 100) + "%";
-    els.npCur.textContent = fmt(s.position / 1000); els.npRem.textContent = "-" + fmt(Math.max(0, (eff - s.position) / 1000));
+    const played = segLen ? Math.max(0, s.position / 1000 - segStart) : s.position / 1000;
+    const total = segLen || eff / 1000;
+    els.npBar.style.width = Math.min(100, played / total * 100) + "%";
+    els.npCur.textContent = fmt(played); els.npRem.textContent = "-" + fmt(Math.max(0, total - played));
     setToggle(!s.paused);
-    if (s.paused && s.position === 0 && lastSpPos > 1500) { lastSpPos = 0; advance(); }
-    else lastSpPos = s.position;
+    // Natural end → next, only once it had actually started (so a just-skipped-to track's
+    // load can't be mistaken for "finished"). For a serial podcast, mark it finished so it
+    // never repeats (position is 0 at the end, so set done explicitly).
+    if (started && s.paused && s.position === 0 && prevPos > 1500) { if (segLen && segState) setProg(segState.id, { done: true }); autoAdvance(); return; }
   }, 500);
 }
 
 // ---- transport ----
 els.toggle.onclick = () => {
-  if (mode === "audio") { els.audio.getAttribute("src") && (els.audio.paused ? playAudio() : (els.audio.pause(), setToggle(false))); }
+  if (mode === "audio") {
+    if (!els.audio.getAttribute("src")) return;
+    if (els.audio.paused) { setPlayIntent(true); playAudio(); if (narration) startBed(); }      // narration: bed rides with the voice
+    else { setPlayIntent(false); els.audio.pause(); setToggle(false); if (narration) stopBed(); }
+  }
   else if (mode === "speak") {
     if (speechSynthesis.speaking && !speechSynthesis.paused) { speechSynthesis.pause(); stopSpeakTimer(); stopKeepalive(); stopBed(); setToggle(false); }
     else if (speechSynthesis.paused) { speechSynthesis.resume(); startSpeakTimer(); startKeepalive(); startBed(); setToggle(true); }
@@ -485,30 +826,68 @@ els.toggle.onclick = () => {
 els.back10.onclick = () => skipBy(-10);
 els.fwd10.onclick = () => skipBy(10);
 function skipBy(delta) {
-  if (mode === "audio") els.audio.currentTime = Math.max(0, Math.min((els.audio.duration || 0), els.audio.currentTime + delta));
+  if (segState && (segState.type === "podcast" || segState.type === "audiobook")) {
+    // Keep ±10s inside the current segment [startSec, startSec+segLen) of the episode.
+    const lo = segState.startSec, hi = segState.startSec + segState.segLen - 1;
+    els.audio.currentTime = Math.max(lo, Math.min(hi, els.audio.currentTime + delta));
+  } else if (mode === "audio") els.audio.currentTime = Math.max(0, Math.min((els.audio.duration || 0), els.audio.currentTime + delta));
   else if (mode === "speak") speakSeek(delta);
   else if (mode === "spotify") MyRadioSpotify.seek(lastSpPos + delta * 1000);
 }
-els.next.onclick = () => { event("skip"); advance(); };
+els.next.onclick = () => { skipCurrent = true; event("skip"); advance(); };
 els.prev.onclick = () => {
-  if (mode === "audio" && els.audio.currentTime > 3) { els.audio.currentTime = 0; return; }
+  if (segState && (segState.type === "podcast" || segState.type === "audiobook") && els.audio.currentTime - segState.startSec > 3) { els.audio.currentTime = segState.startSec; return; }
+  if (mode === "audio" && !segState && els.audio.currentTime > 3) { els.audio.currentTime = 0; return; }
   if (mode === "speak" && speakPos > 3 * CPS && history.length === 0) { startSpeakFrom(speakText, 0); return; }
   index = history.length ? history.pop() : 0; loadCurrent(true);
 };
 els.npProgress.onclick = (e) => {
   const r = els.npProgress.getBoundingClientRect(), ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  if (mode === "audio" && els.audio.duration) els.audio.currentTime = ratio * els.audio.duration;
+  if (segState && (segState.type === "podcast" || segState.type === "audiobook")) {
+    // The bar represents this 5-min SEGMENT (not the whole episode), so map the click
+    // into the segment window and keep it just inside the cap so seeking doesn't skip.
+    const target = segState.startSec + Math.min(ratio * segState.segLen, segState.segLen - 1);
+    els.audio.currentTime = Math.min(target, (els.audio.duration || target));
+  } else if (mode === "audio" && els.audio.duration) els.audio.currentTime = ratio * els.audio.duration;
   else if (mode === "speak") startSpeakFrom(speakText, Math.floor(ratio * speakText.length));
   else if (mode === "spotify") MyRadioSpotify.seek(ratio * (lastSpDur || 0)); // seek by duration, not position
 };
+// Automatic advances (track ended, load error, watchdog, segment/playback caps, Spotify
+// natural-end) are DEBOUNCED so two triggers firing close together — or a stale trigger
+// from a just-torn-down track — can't cascade into a runaway skip. Manual skips (the Next
+// button / dislike) call advance() directly and stay instant; they also bump the timestamp
+// so a stale automatic trigger can't pile on right after a manual skip. The window is far
+// shorter than any real item, so legitimate end-of-item advances are never suppressed.
+let lastAdvanceAt = 0;
+function autoAdvance() {
+  const now = Date.now();
+  if (now - lastAdvanceAt < 700) return;   // an advance just happened → ignore the duplicate
+  advance();
+}
 async function advance() {
+  lastAdvanceAt = Date.now();
   history.push(index); index += 1;
-  await ensureAhead();                          // try to keep items queued ahead
-  if (index >= queue.length) {
-    // Refill couldn't extend the queue (offline, or pool exhausted).
-    if (live) { applyPlan(await getPlan()); index = 0; history.length = 0; }
-    else { index = 0; }                          // local demo loops
+  // Fast path: the next item is already queued → switch to it INSTANTLY (loadCurrent
+  // stops the current audio immediately) and top the queue up in the background. This
+  // is what makes skip feel responsive — it no longer waits on a network refill, which
+  // was leaving the old track playing for seconds and stacking up under rapid clicks.
+  if (index < queue.length) {
+    loadCurrent(true);
+    ensureAhead();                              // background refill, NOT awaited
+    return;
   }
+  // Only when we're genuinely at the end of the queue do we wait for more.
+  await ensureAhead();
+  if (index >= queue.length && live) {
+    try {
+      const r = await fetch(`${API}/api/next`, {
+        method: "POST", headers: await authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ userId: USER, n: REFILL_BATCH, signals: signals(), done: doneIds() }),
+      });
+      if (r.ok) { const more = withSpotify((await r.json()).queue || []); if (more.length) queue = queue.concat(more); }
+    } catch {}
+  }
+  if (index >= queue.length) index = 0;          // truly nothing new (offline / pool dry): loop
   loadCurrent(true);
 }
 function setToggle(playing) { els.toggle.textContent = playing ? "❚❚" : "▶"; }
@@ -517,25 +896,48 @@ function setToggle(playing) { els.toggle.textContent = playing ? "❚❚" : "▶
 function resetReactions() { [els.like, els.save, els.dislike].forEach((b) => b.classList.remove("on")); }
 els.like.onclick = () => { els.like.classList.toggle("on"); event("like"); };
 els.save.onclick = () => { els.save.classList.toggle("on"); event("save"); };
-els.dislike.onclick = () => { els.dislike.classList.add("on"); event("dislike"); setTimeout(() => { event("skip"); advance(); }, 250); };
+els.dislike.onclick = () => { els.dislike.classList.add("on"); event("dislike"); setTimeout(() => { skipCurrent = true; event("skip"); advance(); }, 250); };
 async function event(type) {
   const item = queue[index]; if (!item || !live) return;
   // Send the item's content-type + topic so the backend can learn affinity, not
   // just a per-item reward — this is what makes skipping/liking steer the radio.
-  try { await fetch(`${API}/api/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: USER, itemId: item.id, type, itemType: item.type, itemTopic: item.topic }) }); } catch {}
+  try { await fetch(`${API}/api/events`, { method: "POST", headers: await authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ userId: USER, itemId: item.id, type, itemType: item.type, itemTopic: item.topic }) }); } catch {}
 }
 
+// Show a window around the current item: up to QWINDOW already-played items,
+// the one playing now, and up to QWINDOW upcoming — grouped with labels. Played
+// items sit before `index` in the queue, upcoming after it, so the array order
+// is the listening order. The "Recently played" group only appears once there's history.
+const QWINDOW = 5;
 function renderQueue() {
   els.queue.innerHTML = "";
-  queue.forEach((item, i) => {
+  if (!queue.length || !queue[index]) return;
+  const start = Math.max(0, index - QWINDOW);
+  const end = Math.min(queue.length - 1, index + QWINDOW);
+
+  const addLabel = (text) => {
     const li = document.createElement("li");
-    li.className = "row" + (i === index ? " playing" : "");
+    li.className = "qlabel"; li.textContent = text;
+    els.queue.appendChild(li);
+  };
+  const addRow = (item, i) => {
+    const li = document.createElement("li");
+    const state = i === index ? "playing" : (i < index ? "played" : "");
+    li.className = "row" + (state ? " " + state : "");
+    const tag = i === index ? "♪ playing" : (i < index ? "played" : "▶ audio");
     li.innerHTML = `<span class="badge ${item.type}">${item.type}</span>
       <div class="meta"><div class="rt">${item.title}</div><div class="rs">${item.subtitle || item.source || ""}</div></div>
-      <span class="has-audio">▶ audio</span>`;
+      <span class="has-audio">${tag}</span>`;
     li.onclick = () => { if (i !== index) { history.push(index); index = i; loadCurrent(true); } };
     els.queue.appendChild(li);
-  });
+  };
+
+  if (index > start) addLabel("Recently played");
+  for (let i = start; i < index; i++) addRow(queue[i], i);
+  addLabel("Now playing");
+  addRow(queue[index], index);
+  if (end > index) addLabel("Up next");
+  for (let i = index + 1; i <= end; i++) addRow(queue[i], i);
 }
 
 // ---------- separators: a short two-tone chime between items ----------
@@ -564,7 +966,7 @@ function updateSpotifyUI() {
   els.obSpotify.classList.add("connected");
   els.obSpotify.textContent = premium ? `Spotify ✓ ${spotifyCtx.displayName || ""}`.trim() : "Spotify connected";
   els.obSpotifyStatus.textContent = premium
-    ? `Premium — your top tracks & ${(spotifyCtx.genres || []).slice(0, 3).join(", ")} are in the mix.`
+    ? `Premium — your top tracks, ${(spotifyCtx.genres || []).slice(0, 3).join(", ")} & Spotify podcasts matched to your interests are in the mix.`
     : "No Premium detected — we'll use royalty-free music + iTunes podcasts.";
   els.spStatus.textContent = premium
     ? "🎵 Spotify Premium connected — full-track music from your library; ambient bed under spoken content."
@@ -601,9 +1003,48 @@ function localPlan() {
   };
 }
 
+// ---------- accounts (passwordless magic-link login) ----------
+const acctEls = {
+  account: $("account"), email: $("acct-email"), signin: $("acct-signin"), signout: $("acct-signout"),
+  login: $("login"), loginEmail: $("login-email"), loginSend: $("login-send"), loginMsg: $("login-msg"), loginClose: $("login-close"),
+};
+function updateAccountUI() {
+  if (!auth || !auth.configured() || !acctEls.account) { if (acctEls.account) acctEls.account.hidden = true; return; }
+  acctEls.account.hidden = false;
+  const u = auth.currentUser();
+  acctEls.email.textContent = u ? (u.email || "signed in") : "";
+  acctEls.signin.hidden = !!u;
+  acctEls.signout.hidden = !u;
+}
+function openLogin() { if (acctEls.login) { acctEls.login.hidden = false; acctEls.loginMsg.textContent = ""; } }
+function closeLogin() { if (acctEls.login) acctEls.login.hidden = true; }
+if (acctEls.signin) acctEls.signin.onclick = openLogin;
+if (acctEls.loginClose) acctEls.loginClose.onclick = closeLogin;
+if (acctEls.signout) acctEls.signout.onclick = () => { auth.signOut(); USER = DEVICE_ID; updateAccountUI(); location.reload(); };
+if (acctEls.loginSend) acctEls.loginSend.onclick = async () => {
+  const email = (acctEls.loginEmail.value || "").trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { acctEls.loginMsg.textContent = "Please enter a valid email."; return; }
+  acctEls.loginSend.disabled = true; acctEls.loginMsg.textContent = "Sending…";
+  try { await auth.sendLink(email); acctEls.loginMsg.textContent = "✓ Check your inbox for the login link, then open it on this device."; }
+  catch (e) { acctEls.loginMsg.textContent = "Couldn't send link: " + (e.message || e); }
+  finally { acctEls.loginSend.disabled = false; }
+};
+// Resolve identity on boot: capture a magic-link return, then use the account id if logged
+// in (so the feed follows the user). Migration of the device profile onto a fresh account is
+// handled server-side via `migrateFrom` on the next onboarding build.
+async function initAuth() {
+  if (!auth || !auth.configured()) { updateAccountUI(); return; }
+  try { auth.handleRedirect(); } catch {}
+  let u = null;
+  try { u = await auth.loadUser(); } catch {}
+  if (u) USER = u.id;
+  updateAccountUI();
+}
+
 // ---------- boot ----------
 (async () => {
   await checkHealth();
+  await initAuth();
   if (window.MyRadioSpotify) {
     await MyRadioSpotify.handleRedirect();
     if (MyRadioSpotify.isConnected()) {

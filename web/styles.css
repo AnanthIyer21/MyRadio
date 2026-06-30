@@ -118,10 +118,37 @@ h1 .ai { color: var(--accent); }
 .queue { margin-top: 28px; }
 .queue h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
 #queue { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.qlabel { list-style: none; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 12px 0 0; padding-left: 2px; }
+.qlabel:first-child { margin-top: 0; }
 .row { background: var(--panel); border: 1px solid #232733; border-radius: 12px; padding: 11px 14px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .row:hover { border-color: var(--accent); }
 .row.playing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.row.played { opacity: 0.5; }
+.row.played:hover { opacity: 0.75; }
 .row .meta { flex: 1; min-width: 0; }
 .row .rt { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .rs { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .row .has-audio { font-size: 12px; color: var(--good); }
+.row.played .has-audio { color: var(--muted); }
+.row.playing .has-audio { color: var(--accent); }
+
+/* ===== Accounts (magic-link login) ===== */
+.account { display: flex; align-items: center; gap: 8px; }
+.acct-email { font-size: 12px; color: var(--muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-btn { font-size: 12px; color: var(--text, #e8eaf0); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.acct-btn:hover { border-color: var(--accent); }
+
+.login-overlay { position: fixed; inset: 0; background: rgba(6,8,12,0.72); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+.login-card { background: var(--panel, #14171f); border: 1px solid #232733; border-radius: 16px; padding: 26px; max-width: 380px; width: 100%; }
+.login-card h2 { margin: 0 0 6px; font-size: 20px; }
+.login-card .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.login-card .field { display: block; margin-bottom: 14px; }
+.login-card .field span { display: block; font-size: 13px; margin-bottom: 6px; }
+.login-card input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #2a2f3c; background: #0e1118; color: inherit; font-size: 14px; }
+.login-msg { font-size: 13px; color: var(--muted); min-height: 18px; margin: 12px 0; }
+#login-close { width: 100%; margin-top: 4px; }
+
+/* The HTML `hidden` attribute must always win over display rules like `.login-overlay{display:flex}`
+   and `.account{display:flex}` — otherwise toggling `hidden` in JS does nothing and the element
+   stays on screen (this was the "login modal won't go away" bug). */
+[hidden] { display: none !important; }
