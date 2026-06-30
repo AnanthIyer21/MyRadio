@@ -252,22 +252,27 @@ async function refreshSpotifyMusic() {
   // Fall back to vibe→genre searches only when a vibe was named but no concrete genre.
   if (!genres.length) for (const v of vibes) for (const x of (VIBE_Q[v] || [])) push(x.q, x.e);
   if (!queries.length) return; // no stated taste → keep the library pool as-is
-  try {
-    // Deep vibe pool (≈40/query) so it stays dominant over a long session instead of being
-    // exhausted by the recent-window and falling back to the listener's library.
-    const vibeTracks = await MyRadioSpotify.searchTracks(queries.slice(0, 6), 20);
-    if (vibeTracks.length) {
-      const lib = spotifyCtx?.topTracks || [];                 // energy-untagged → fallback only
-      // Spotify blocks genre/audio-features for this app, so we can't classify the listener's
-      // OWN tracks by vibe. Next best thing: flag vibe-search hits whose artist is already in
-      // their library, so the picker leans toward artists they actually listen to.
-      const libArtists = new Set(lib.map((t) => (t.artist || "").toLowerCase().trim()).filter(Boolean));
-      vibeTracks.forEach((t) => { t.familiar = libArtists.has((t.artist || "").toLowerCase().trim()); });
-      const seen = new Set(vibeTracks.map((t) => t.uri));
-      spotifyMusic = vibeTracks.concat(lib.filter((t) => !seen.has(t.uri)));
-    }
-  } catch { /* keep whatever pool we had */ }
+  // Cache the vibe-search results by taste signature so rebuilding the same station doesn't
+  // re-fire ~12 search calls (another 429 source).
+  const sig = queries.map((q) => q.q).sort().join("|");
+  let vibeTracks = vibeCacheRead(sig);
+  if (!vibeTracks) {
+    try { vibeTracks = await MyRadioSpotify.searchTracks(queries.slice(0, 6), 20); } catch { vibeTracks = []; }
+    if (vibeTracks.length >= 10) vibeCacheWrite(sig, vibeTracks); // don't cache a thin (rate-limited) result
+  }
+  if (!vibeTracks.length) return;                              // search failed → keep library pool
+  const lib = spotifyCtx?.topTracks || [];                     // energy-untagged → fallback only
+  // Spotify blocks genre/audio-features for this app, so we can't classify the listener's OWN
+  // tracks by vibe. Next best thing: flag vibe-search hits whose artist is already in their
+  // library, so the picker leans toward artists they actually listen to.
+  const libArtists = new Set(lib.map((t) => (t.artist || "").toLowerCase().trim()).filter(Boolean));
+  vibeTracks.forEach((t) => { t.familiar = libArtists.has((t.artist || "").toLowerCase().trim()); });
+  const seen = new Set(vibeTracks.map((t) => t.uri));
+  spotifyMusic = vibeTracks.concat(lib.filter((t) => !seen.has(t.uri)));
 }
+const VIBE_CACHE_KEY = "myradio_vibepool", VIBE_TTL = 12 * 3600 * 1000;
+function vibeCacheRead(sig) { try { const j = JSON.parse(localStorage.getItem(VIBE_CACHE_KEY) || "null"); if (j && j.sig === sig && Array.isArray(j.v) && j.v.length && (Date.now() - j.t) < VIBE_TTL) return j.v; } catch {} return null; }
+function vibeCacheWrite(sig, v) { try { localStorage.setItem(VIBE_CACHE_KEY, JSON.stringify({ t: Date.now(), sig, v })); } catch {} }
 
 function persist() { try { localStorage.setItem("myradio_profile", JSON.stringify({ profile, LENGTHS, summaryPrefs })); } catch {} }
 

@@ -91,9 +91,16 @@
 
   const isConnected = () => !!localStorage.getItem(LS.at) || !!localStorage.getItem(LS.rt);
 
-  async function api(path) {
+  async function api(path, _retry = 0) {
     const at = await token(); if (!at) throw new Error("no token");
     const r = await fetch(`https://api.spotify.com/v1${path}`, { headers: { authorization: "Bearer " + at } });
+    // Rate limited: wait the server-suggested delay (capped) and retry once, so a brief 429
+    // spike self-heals instead of emptying the music pool.
+    if (r.status === 429 && _retry < 1) {
+      const wait = Math.min(8, Math.max(1, Number(r.headers.get("retry-after")) || 2)) * 1000;
+      await new Promise((res) => setTimeout(res, wait));
+      return api(path, _retry + 1);
+    }
     if (!r.ok) throw new Error(`spotify ${path} -> ${r.status}`);
     return r.json();
   }
@@ -128,8 +135,18 @@
   // URI *and* by song identity (title+artist) so the same song under different URIs (single
   // vs album vs playlist copy) can't reappear — that was the "same song again and again" bug.
   // Capped at MAX so a huge library stays bounded; fresh/empty accounts cascade to fallbacks.
-  const TRACK_CAP = 800;
+  const TRACK_CAP = 400;
+  // Cache the built library pool so we don't re-fire ~15 API calls on every reload/build —
+  // a major source of 429 rate-limiting. The library changes slowly; 12h freshness is fine.
+  const LIB_KEY = "sp_lib", LIB_TTL = 12 * 3600 * 1000;
+  // Only treat a cache as valid if it's a SUBSTANTIAL library (≥30). This stops a degraded
+  // load (e.g. when rate-limited, getTracks falls back to ~10 "top hits") from being cached
+  // and then frozen for 12h. A real library load is hundreds of tracks.
+  function libCacheRead() { try { const j = JSON.parse(localStorage.getItem(LIB_KEY) || "null"); if (j && Array.isArray(j.v) && j.v.length >= 30 && (Date.now() - j.t) < LIB_TTL) return j.v; } catch {} return null; }
+  function libCacheWrite(v) { try { if (v && v.length >= 50) localStorage.setItem(LIB_KEY, JSON.stringify({ t: Date.now(), v })); } catch {} }
   async function getTracks(artists = []) {
+    const cached = libCacheRead();
+    if (cached) return cached;
     const out = [];
     const seenUri = new Set();
     const seenSong = new Set();      // normalized title|artist — kills same-song-different-uri
@@ -155,17 +172,17 @@
     // 2) Recently played (last 50 distinct).
     add(((await api("/me/player/recently-played?limit=50").catch(() => ({ items: [] }))).items || []).map((i) => i.track).filter(Boolean));
 
-    // 3) Saved / "Liked Songs" — paginate the whole library (bounded by TRACK_CAP).
-    for (let off = 0; off < 1000 && out.length < TRACK_CAP; off += 50) {
+    // 3) Saved / "Liked Songs" — first few pages (kept modest to limit API calls).
+    for (let off = 0; off < 200 && out.length < TRACK_CAP; off += 50) {
       const page = (await api(`/me/tracks?limit=50&offset=${off}`).catch(() => ({ items: [] }))).items || [];
       add(page.map((i) => i.track).filter(Boolean));
       if (page.length < 50) break;
     }
 
-    // 4) Playlists — pull tracks from the listener's playlists for breadth/variety.
+    // 4) Playlists — a few of the listener's playlists for breadth/variety.
     if (out.length < TRACK_CAP) {
       const lists = ((await api("/me/playlists?limit=50").catch(() => ({ items: [] }))).items || []).filter((p) => p && p.id);
-      for (const pl of lists.slice(0, 25)) {
+      for (const pl of lists.slice(0, 6)) {
         if (out.length >= TRACK_CAP) break;
         const page = (await api(`/playlists/${pl.id}/tracks?limit=50&fields=${encodeURIComponent("items(track(uri,name,is_local,artists(name)))")}`).catch(() => ({ items: [] }))).items || [];
         add(page.map((i) => i.track).filter(Boolean));
@@ -178,8 +195,9 @@
       add(((await api(`/artists/${a.id}/top-tracks?market=from_token`).catch(() => ({ tracks: [] }))).tracks) || []);
       if (out.length >= 10) break;
     }
-    if (out.length < 5) add(((await api("/search?type=track&limit=25&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
+    if (out.length < 5) add(((await api("/search?type=track&limit=10&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
 
+    libCacheWrite(out);
     return out;
   }
 
@@ -222,7 +240,7 @@
   // Premium "so many more podcasts" path. Playback is still Web-SDK only (Premium), so
   // callers gate on isPremium()/isReady().
   async function searchPodcasts(terms = [], perTerm = 3) {
-    const uniq = [...new Set(terms.map((t) => String(t).trim().toLowerCase()).filter((t) => t.length > 2))].slice(0, 5);
+    const uniq = [...new Set(terms.map((t) => String(t).trim().toLowerCase()).filter((t) => t.length > 2))].slice(0, 4);
     if (!uniq.length) return [];
     // Find candidate shows across the interest terms (deduped by show id).
     const found = await Promise.all(uniq.map((q) =>
@@ -230,8 +248,8 @@
     ));
     const shows = new Map();
     for (const r of found) for (const sh of (r?.shows?.items || [])) if (sh?.id && !shows.has(sh.id)) shows.set(sh.id, sh);
-    // Pull the latest episode from each distinct show, in parallel.
-    const eps = await Promise.all([...shows.values()].slice(0, 12).map(async (sh) => {
+    // Pull the latest episode from each distinct show (capped to limit API calls / 429s).
+    const eps = await Promise.all([...shows.values()].slice(0, 6).map(async (sh) => {
       try { const ep = (await api(`/shows/${sh.id}/episodes?limit=1&market=from_token`)).items?.[0]; return ep ? { uri: ep.uri, title: ep.name, show: sh.name } : null; }
       catch { return null; }
     }));
