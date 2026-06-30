@@ -189,13 +189,15 @@
       }
     }
 
-    // Fallbacks for fresh/empty accounts (no listening history yet): artist top tracks, then search.
+    // Fallback for fresh accounts: the listener's OWN top artists' top tracks (real, personal).
+    // No generic "top hits" catalogue search — it returns spam tracks literally named "Top
+    // Hits", and when the real library just 429'd we'd rather degrade to royalty-free music
+    // (proper titles) than serve junk. An empty pool simply means withSpotify won't swap.
     if (out.length < 5) for (const a of artists.slice(0, 3)) {
       if (!a.id) continue;
       add(((await api(`/artists/${a.id}/top-tracks?market=from_token`).catch(() => ({ tracks: [] }))).tracks) || []);
       if (out.length >= 10) break;
     }
-    if (out.length < 5) add(((await api("/search?type=track&limit=10&q=top%20hits").catch(() => ({ tracks: { items: [] } }))).tracks?.items) || []);
 
     libCacheWrite(out);
     return out;
