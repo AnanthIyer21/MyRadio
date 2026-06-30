@@ -91,15 +91,25 @@
 
   const isConnected = () => !!localStorage.getItem(LS.at) || !!localStorage.getItem(LS.rt);
 
+  // After a sustained 429 we enter a short cooldown during which api() makes NO calls — this
+  // stops the app from re-triggering Spotify's rate-limit penalty on every reload/build (which
+  // kept it from ever clearing). Persisted so a reload still respects it.
+  let cooldownUntil = 0;
+  try { cooldownUntil = Number(localStorage.getItem("sp_cooldown") || 0); } catch {}
+  const inCooldown = () => Date.now() < cooldownUntil;
   async function api(path, _retry = 0) {
+    if (inCooldown()) throw new Error("spotify cooldown");
     const at = await token(); if (!at) throw new Error("no token");
     const r = await fetch(`https://api.spotify.com/v1${path}`, { headers: { authorization: "Bearer " + at } });
-    // Rate limited: wait the server-suggested delay (capped) and retry once, so a brief 429
-    // spike self-heals instead of emptying the music pool.
-    if (r.status === 429 && _retry < 1) {
-      const wait = Math.min(8, Math.max(1, Number(r.headers.get("retry-after")) || 2)) * 1000;
-      await new Promise((res) => setTimeout(res, wait));
-      return api(path, _retry + 1);
+    if (r.status === 429) {
+      // Retry once on a brief spike; if still limited, back off for 60s so the window can reset.
+      if (_retry < 1) {
+        const wait = Math.min(8, Math.max(1, Number(r.headers.get("retry-after")) || 2)) * 1000;
+        await new Promise((res) => setTimeout(res, wait));
+        return api(path, _retry + 1);
+      }
+      cooldownUntil = Date.now() + 60000;
+      try { localStorage.setItem("sp_cooldown", String(cooldownUntil)); } catch {}
     }
     if (!r.ok) throw new Error(`spotify ${path} -> ${r.status}`);
     return r.json();
@@ -320,6 +330,6 @@
     onState: (cb) => { stateCb = cb; },
     isPremium: () => premium, isReady: () => ready, lastError: () => lastError,
     search: (q, type = "track") => api(`/search?type=${type}&limit=10&q=${encodeURIComponent(q)}`),
-    searchPodcasts, searchTracks,
+    searchPodcasts, searchTracks, inCooldown,
   };
 })();
