@@ -354,28 +354,35 @@ function withSpotify(items) {
     const recent = new Set(queue.slice(-RECENT).filter((it) => it.spotifyUri).map((it) => it.spotifyUri));
     const pool = shuffled(spotifyMusic);
     const assigned = new Set();
-    let fb = 0; // rotates among the closest-energy candidates for variety
-    // Pick a track for THIS music slot: keep the no-repeat tiers, then among eligible tracks
-    // choose the one whose energy best matches the slot's intended energy (so a "lo-fi" slot
-    // gets a chill track, a "workout" slot gets an upbeat one). Vibe-search tracks are
-    // energy-tagged; library tracks aren't, so they sit at a fixed distance and act as a
-    // fallback — restoring taste + context matching that the old random pick lost.
-    const pick = (target) => {
-      const t = (typeof target === "number") ? target : 0.5;
-      // Rank by energy distance, with a small bonus for tracks by artists already in the
-      // listener's library — so the vibe pool leans toward familiar artists where possible.
-      const score = (x) => ((typeof x.energy === "number") ? Math.abs(x.energy - t) : 0.5) - (x.familiar ? 0.06 : 0);
-      let cands = pool.filter((x) => !played.has(x.uri) && !recent.has(x.uri) && !assigned.has(x.uri));
-      if (!cands.length) cands = pool.filter((x) => !recent.has(x.uri) && !assigned.has(x.uri));
-      if (!cands.length) cands = pool.filter((x) => !assigned.has(x.uri));
-      if (!cands.length) cands = pool;
+    let fb = 0; // rotates among the closest candidates for variety
+    // BLEND: play mostly the listener's own library, with ~1 in 3 slots a vibe-matched
+    // catalogue track for the mood they stated (energy-matched to the slot). Library tracks
+    // carry no energy/genre (Spotify blocks that for this app), so they just rotate with the
+    // no-repeat tiers; vibe tracks (energy-tagged) get matched to the slot's intended energy.
+    const vibePool = pool.filter((x) => typeof x.energy === "number");
+    const libPool  = pool.filter((x) => typeof x.energy !== "number");
+    const pickFrom = (sub, target) => {
+      if (!sub.length) return null;
+      const tgt = (typeof target === "number") ? target : 0.5;
+      const score = (x) => ((typeof x.energy === "number") ? Math.abs(x.energy - tgt) : 0.5) - (x.familiar ? 0.06 : 0);
+      let cands = sub.filter((x) => !played.has(x.uri) && !recent.has(x.uri) && !assigned.has(x.uri));
+      if (!cands.length) cands = sub.filter((x) => !recent.has(x.uri) && !assigned.has(x.uri));
+      if (!cands.length) cands = sub.filter((x) => !assigned.has(x.uri));
+      if (!cands.length) cands = sub;
       cands = cands.slice().sort((a, b) => score(a) - score(b));
-      const k = Math.min(5, cands.length);                       // rotate among the closest few
-      return cands[(fb++) % k];
+      return cands[(fb++) % Math.min(5, cands.length)];
+    };
+    let musicCount = 0;
+    const pick = (target) => {
+      const wantVibe = vibePool.length && (musicCount % 3 === 2); // ~1 of every 3 → vibe discovery
+      musicCount++;
+      return pickFrom(wantVibe ? vibePool : libPool, target)
+        || pickFrom(wantVibe ? libPool : vibePool, target)        // other pool if first is dry
+        || pickFrom(pool, target);
     };
     out = out.map((it) => {
       if (it.type !== "music") return it;
-      const t = pick(it.energy); assigned.add(t.uri);
+      const t = pick(it.energy); if (!t) return it; assigned.add(t.uri);
       return { ...it, spotifyUri: t.uri, title: t.title, subtitle: `${t.artist} · Spotify`, source: "Spotify" };
     });
   }
