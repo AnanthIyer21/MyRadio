@@ -1,0 +1,18 @@
+# Render Blueprint for the MyRadio backend (zero-dependency Node server).
+# Deploy: Render dashboard → New → Blueprint → pick the AnanthIyer21/MyRadio repo.
+# Render reads this file, creates the service, and prompts you for the secret env vars below.
+services:
+  - type: web
+    name: myradio-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false              # paste in the Render dashboard (kept out of git)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
