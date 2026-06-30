@@ -43,6 +43,7 @@ const els = {
   mode: $("mode"), explanation: $("explanation"), queue: $("queue"),
   gear: $("gear"), settings: $("settings"), spStatus: $("sp-status"),
   obSpotify: $("ob-spotify"), obSpotifyStatus: $("ob-spotify-status"),
+  nowcard: $("nowcard"),
   npBadge: $("np-badge"), npTitle: $("np-title"), npSub: $("np-sub"), npNote: $("np-note"),
   npProgress: $("np-progress"), npBar: $("np-bar"), npCur: $("np-cur"), npRem: $("np-rem"),
   prev: $("prev"), back10: $("back10"), toggle: $("toggle"), fwd10: $("fwd10"), next: $("next"),
@@ -497,6 +498,7 @@ async function loadCurrent(autoplay = false) {
   const item = queue[index]; if (!item) return;
 
   els.npBadge.textContent = item.type; els.npBadge.className = "badge " + item.type;
+  if (els.nowcard) els.nowcard.className = "nowcard " + item.type;   // hero card tints to the content type
   els.npTitle.textContent = item.title;
   els.npSub.textContent = item.subtitle || item.source || "";
   resetReactions(); renderQueue();
@@ -524,9 +526,9 @@ async function loadCurrent(autoplay = false) {
 }
 function noteFor(item, d) {
   if (item.type === "music") return d.kind === "spotify" ? "▶ Spotify" : "";
-  if (d.serial === "podcast") return "🎙 Podcast — playing in segments";
-  if (d.serial === "audiobook") return "📖 Audiobook — narrated, in segments";
-  return d.isFull ? "📖 Reading the full text" : "🔊 AI summary (spoken)";
+  if (d.serial === "podcast") return "Podcast — playing in segments";
+  if (d.serial === "audiobook") return "Audiobook — narrated, in segments";
+  return d.isFull ? "Reading the full text" : "AI summary (spoken)";
 }
 
 // ---- runtime playback watchdog (self-healing "agent") ----
@@ -613,14 +615,14 @@ function prewarmAhead() {
 }
 async function startNarration(text, { bed = true } = {}) {
   const my = loadToken;
-  els.npNote.textContent = "🔊 Preparing audio…";
+  els.npNote.textContent = "Preparing audio…";
   const objUrl = await ttsFor(text);
   if (my !== loadToken) { if (objUrl) URL.revokeObjectURL(objUrl); return; } // moved on while synthesizing
   if (objUrl) {
     narration = bed; mode = "audio";                   // `narration` = "bed rides with the voice"
     if (lastBlobUrl) { try { URL.revokeObjectURL(lastBlobUrl); } catch {} }
     lastBlobUrl = objUrl;
-    els.npNote.textContent = current?.serial === "audiobook" ? "📖 Audiobook — read aloud in segments" : "🔊 AI summary (spoken)";
+    els.npNote.textContent = current?.serial === "audiobook" ? "Audiobook — read aloud in segments" : "AI summary (spoken)";
     els.audio.src = objUrl; if (bed) startBed(); playAudio();
   } else {
     narration = false; mode = "speak";                 // last-resort fallback: browser voice
