@@ -274,10 +274,14 @@
       if (ready) return resolve(true);
       const boot = () => {
         player = new window.Spotify.Player({ name: "MyRadio AI", getOAuthToken: (cb) => token().then((t) => cb(t)), volume: 0.8 });
-        player.addListener("ready", ({ device_id }) => { deviceId = device_id; ready = true; resolve(true); });
+        // The SDK only becomes "ready" for PREMIUM accounts and works even when the Web API
+        // (/me) is rate-limited — so treat `ready` as the authoritative Premium signal.
+        player.addListener("ready", ({ device_id }) => { deviceId = device_id; ready = true; premium = true; try { localStorage.setItem("sp_premium", "1"); } catch {} resolve(true); });
         player.addListener("not_ready", () => {});
         player.addListener("player_state_changed", (s) => { if (stateCb) stateCb(s); });
-        ["initialization_error", "authentication_error", "account_error"].forEach((ev) => player.addListener(ev, () => resolve(false)));
+        // account_error = definitively NOT premium. init/auth errors are transient — don't flip premium.
+        player.addListener("account_error", () => { premium = false; try { localStorage.setItem("sp_premium", "0"); } catch {} resolve(false); });
+        ["initialization_error", "authentication_error"].forEach((ev) => player.addListener(ev, () => resolve(false)));
         player.connect();
         setTimeout(() => resolve(ready), 9000); // resolve anyway so boot never hangs
       };

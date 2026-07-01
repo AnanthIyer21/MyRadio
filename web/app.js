@@ -1044,7 +1044,8 @@ const fmt = (s = 0) => { s = Math.floor(s); return `${Math.floor(s / 60)}:${Stri
 els.obSpotify.onclick = () => { saveDraft(); MyRadioSpotify.connect(); };
 function updateSpotifyUI() {
   if (!spotifyCtx) return;
-  const premium = spotifyCtx.premium;
+  // Prefer the SDK-confirmed Premium (works when /me is rate-limited) over spotifyCtx.premium.
+  const premium = (window.MyRadioSpotify && MyRadioSpotify.isPremium()) || spotifyCtx.premium;
   els.obSpotify.classList.add("connected");
   els.obSpotify.textContent = premium ? `Spotify ✓ ${spotifyCtx.displayName || ""}`.trim() : "Spotify connected";
   els.obSpotifyStatus.textContent = premium
@@ -1130,13 +1131,16 @@ async function initAuth() {
   if (window.MyRadioSpotify) {
     await MyRadioSpotify.handleRedirect();
     if (MyRadioSpotify.isConnected()) {
-      try {
-        spotifyCtx = await MyRadioSpotify.loadContext();
-        if (spotifyCtx.premium) { await MyRadioSpotify.initPlayer(); spotifyMusic = spotifyCtx.topTracks || []; spotifyPodcasts = spotifyCtx.topShows || []; }
-        updateSpotifyUI();
-      } catch (e) {
-        if (els.obSpotifyStatus) els.obSpotifyStatus.textContent = `Couldn't load your Spotify data: ${e.message || e}`;
+      try { spotifyCtx = await MyRadioSpotify.loadContext(); } catch { spotifyCtx = spotifyCtx || {}; }
+      // Confirm Premium via the playback SDK (works even when the Web API /me is rate-limited),
+      // then load the pools if Premium. This is why "no Premium" showed on the live site — /me
+      // was 429'd; the SDK's `ready` event is the reliable signal.
+      try { await MyRadioSpotify.initPlayer(); } catch {}
+      if (MyRadioSpotify.isPremium()) {
+        spotifyMusic = (spotifyCtx && spotifyCtx.topTracks) || [];
+        spotifyPodcasts = (spotifyCtx && spotifyCtx.topShows) || [];
       }
+      updateSpotifyUI();
     } else if (MyRadioSpotify.lastError && MyRadioSpotify.lastError()) {
       // Login was attempted but didn't complete — show why instead of failing silently.
       if (els.obSpotifyStatus) els.obSpotifyStatus.textContent = MyRadioSpotify.lastError();
